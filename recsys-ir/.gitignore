@@ -1,0 +1,41 @@
+# Data & model artefacts
+data/**
+!data/**/.gitkeep
+*.zip
+*.tar.gz
+*.pt
+*.ckpt
+*.bin
+*.safetensors
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs (keep the template, ignore runtime logs)
+logs/*.log

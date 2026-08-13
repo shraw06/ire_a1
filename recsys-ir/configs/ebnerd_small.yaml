@@ -1,0 +1,9 @@
+# ── EB-NeRD Small dataset config ────────────────────────────────────
+# Overrides base.yaml for EB-NeRD small split (Danish, Parquet-based).
+
+dataset:
+  name: ebnerd_small
+  language: da
+  raw_dir: data/raw/ebnerd
+  format: parquet
+  has_pretrained_embeddings: true

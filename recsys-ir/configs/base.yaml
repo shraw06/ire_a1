@@ -1,0 +1,31 @@
+# ── Base configuration ──────────────────────────────────────────────
+# Shared across all datasets.  Per-dataset configs override specific keys.
+
+seed: 42
+
+paths:
+  raw_data:       data/raw
+  interim_data:   data/interim
+  processed_data: data/processed
+  logs:           logs
+
+logging:
+  level: INFO          # DEBUG | INFO | WARNING | ERROR
+  format: "%(asctime)s [%(levelname)s] %(name)s — %(message)s"
+
+retrieval:
+  bm25:
+    k1: 1.5
+    b:  0.75
+    top_k: 100
+  ann:
+    metric: cosine
+    top_k: 100
+    nprobe: 10
+
+evaluation:
+  ndcg_cutoffs: [5, 10]
+  bootstrap:
+    n_iterations: 1000
+    confidence_level: 0.95
+    seed: ${seed}

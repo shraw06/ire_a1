@@ -1,0 +1,12 @@
+# ── MIND Small dataset config ───────────────────────────────────────
+# Overrides base.yaml for MIND (English, TSV-based).
+
+dataset:
+  name: mind_small
+  language: en
+  raw_dir: data/raw/mind
+  format: tsv
+  url: "https://msnews.github.io/"   # placeholder — actual download URL set in ingestion
+  splits:
+    train: MINDsmall_train
+    dev:   MINDsmall_dev

@@ -1,0 +1,9 @@
+# ── EB-NeRD Demo dataset config ─────────────────────────────────────
+# Overrides base.yaml for EB-NeRD demo split (Danish, Parquet-based).
+
+dataset:
+  name: ebnerd_demo
+  language: da
+  raw_dir: data/raw/ebnerd
+  format: parquet
+  has_pretrained_embeddings: true
