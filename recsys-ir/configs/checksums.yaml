@@ -1,0 +1,13 @@
+# Dataset file checksums
+# Used by download scripts to verify integrity and skip re-download.
+# Format: SHA-256 hex digest of the downloaded zip file.
+#
+# To regenerate:
+#   sha256sum data/raw/mind/MINDsmall_train.zip
+#   sha256sum data/raw/ebnerd/ebnerd_demo.zip
+
+mind:
+  MINDsmall_train.zip: a966e5138ad103376e9817e02395719bf1c62ec56e6e98c30d46fbb991a7fafa
+  MINDsmall_dev.zip: b315cde1c9b9d45008b5a7c4b2e1f87647659f09f74892ae3899c0005d5d6155
+ebnerd:
+  ebnerd_demo.zip: fb28b4f95249c6571f2fe52ed4083a810ba7da651aa38123d16b232bbeca72c2

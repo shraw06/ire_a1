@@ -35,3 +35,13 @@ Each entry should follow this template:
 - **Output Summary:** Created download scripts (`src/ingestion/download_mind.py`, `download_ebnerd.py`) integrating `python-dotenv` for HF tokens and robust retry logic. Generated Jupyter notebooks (`notebooks/00_explore_mind.ipynb`, `notebooks/00_explore_ebnerd.ipynb`) using programmatic EDA generation via python script. Created comprehensive `EDA_SUMMARY.md` tracking sizes, temporal splits, CTR (MIND ~4%, EB-NeRD ~8.5%), missingness, and verified Danish unicode requirements.
 - **Disposition:** Accepted with edits
 - **Edits Made:** User prompted to use `.env` file to store HF tokens instead of direct export, prompted to update `Makefile` to include specific `make download` targets, and instructed the model to retry/continue download processes that timed out due to unstable connections.
+
+---
+
+### 2026-08-14 22:42 - Unified Schema Parsing & Checksums Integration
+
+- **Tool / Model:** Claude Opus 4.6 (Thinking) / Claude Sonnet 4.6 (Thinking)
+- **Prompt / Task:** Get both MIND and EB-NeRD datasets into ONE shared schema. Create unified Pydantic schema models, parsers for both datasets (`parse_mind.py`, `parse_ebnerd.py`) resolving structural differences explicitly (e.g. MIND body is null, EB-NeRD history has real timestamps). Validate schemas with tests. Additionally, implement checksum verification (`checksums.py`) to avoid re-downloading if archives are valid.
+- **Output Summary:** Created `src/common/schema.py`, `src/parsing/parse_mind.py`, and `src/parsing/parse_ebnerd.py` to parse raw data into unified interim parquet files (`articles`, `behaviors`, `users`). Added `configs/checksums.yaml` and `src/ingestion/checksums.py` to handle SHA-256 validation. Updated `download_mind.py` and `download_ebnerd.py` to use `verify_or_populate`. Created `test_schema.py` to validate parity and known differences.
+- **Disposition:** Accepted with edits
+- **Edits Made:** Instructed model to fix CSV quoting issues (`quote_char=None`) in MIND parser when encountering unescaped quotes. Fixed import errors by adding a root `conftest.py` for testing and modifying `download_*.py` scripts to use relative imports with a `sys.path` fallback for direct execution. Fixed `pyproject.toml` build backend to allow editable installs (`pip install -e .`).

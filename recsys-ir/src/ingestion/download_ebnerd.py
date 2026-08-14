@@ -3,7 +3,7 @@
 Usage:
     python -m src.ingestion.download_ebnerd
 
-The demo bundle is hosted on public S3 — no authentication token is required.
+The demo bundle is hosted on public S3 - no authentication token is required.
 The .env file is still loaded for consistency with download_mind.py.
 """
 
@@ -13,6 +13,13 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
+
+try:
+    from .checksums import verify_or_populate          # python -m src.ingestion.download_ebnerd
+except ImportError:
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from src.ingestion.checksums import verify_or_populate  # python src/ingestion/download_ebnerd.py
 
 # Load .env from the project root (two directories above this file)
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -33,14 +40,24 @@ CHUNK_SIZE = 128 * 1024  # 128 KB
 # Helpers
 
 def _download_file(url: str, dest: Path, max_retries: int = 3) -> None:
-    """Stream-download *url* to *dest* with progress reporting and retries."""
+    """Stream-download *url* to *dest* with progress reporting and retries.
+
+    Skips download entirely if the file already exists and its checksum
+    matches the value stored in configs/checksums.yaml.
+    """
     if dest.exists():
-        print(f"  ✓ Already exists: {dest.name} ({dest.stat().st_size / 1024**2:.1f} MB)")
-        return
+        # Archive exists - verify checksum before deciding to skip
+        if verify_or_populate("ebnerd", dest.name, dest):
+            print(f"  ✓ Already exists and checksum OK: {dest.name} ({dest.stat().st_size / 1024**2:.1f} MB)")
+            return
+        else:
+            # Checksum mismatch - remove corrupt archive and re-download
+            print(f"  Removing corrupt archive: {dest.name}")
+            dest.unlink()
 
     for attempt in range(1, max_retries + 1):
         try:
-            print(f"  ⬇  Downloading {dest.name} (attempt {attempt}/{max_retries}) …")
+            print(f"  ⬇  Downloading {dest.name} (attempt {attempt}/{max_retries}) ...")
             resp = requests.get(url, stream=True, timeout=120)
             resp.raise_for_status()
 
@@ -58,6 +75,9 @@ def _download_file(url: str, dest: Path, max_retries: int = 3) -> None:
                         print(f"\r    {downloaded / 1024**2:.1f} MB", end="", flush=True)
 
             print(f"\n  ✓ Saved {dest.name} ({downloaded / 1024**2:.1f} MB)")
+
+            # Compute and persist checksum for the freshly downloaded file
+            verify_or_populate("ebnerd", dest.name, dest)
             return  # success
 
         except (requests.ConnectionError, requests.ChunkedEncodingError) as exc:
@@ -66,7 +86,7 @@ def _download_file(url: str, dest: Path, max_retries: int = 3) -> None:
                 dest.unlink()
             if attempt < max_retries:
                 wait = 5 * attempt
-                print(f"\n  ⚠ Connection error: {exc}\n    Retrying in {wait}s …")
+                print(f"\n  ⚠ Connection error: {exc}\n    Retrying in {wait}s ...")
                 import time
                 time.sleep(wait)
             else:
@@ -82,7 +102,7 @@ def _unzip(zip_path: Path, extract_to: Path) -> None:
         print(f"  ✓ Already extracted: {marker.name}/")
         return
 
-    print(f"  📦 Extracting {zip_path.name} → {extract_to.name}/ …")
+    print(f"  📦 Extracting {zip_path.name} -> {extract_to.name}/ ...")
     with zipfile.ZipFile(zip_path, "r") as zf:
         zf.extractall(extract_to)
     print(f"  ✓ Extracted {zip_path.name}")

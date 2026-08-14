@@ -4,7 +4,7 @@ Usage:
     python -m src.ingestion.download_mind
 
 The script reads HF_TOKEN from the project .env file (or the shell environment).
-Copy .env.example → .env and fill in your token before running.
+Copy .env.example -> .env and fill in your token before running.
 """
 
 import os
@@ -13,6 +13,13 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
+
+try:
+    from .checksums import verify_or_populate          # python -m src.ingestion.download_mind
+except ImportError:
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from src.ingestion.checksums import verify_or_populate  # python src/ingestion/download_mind.py
 
 # Load .env from the project root (two directories above this file)
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -42,7 +49,7 @@ def _build_headers() -> dict[str, str]:
 
     If neither is set the download is attempted without auth, which will fail
     for gated datasets.  In that case:
-      - Set HF_TOKEN in .env (copy .env.example → .env), OR
+      - Set HF_TOKEN in .env (copy .env.example -> .env), OR
       - Download the zips manually from https://huggingface.co/datasets/yjw1029/MIND
         and place them in data/raw/mind/.
     """
@@ -61,14 +68,24 @@ def _build_headers() -> dict[str, str]:
 
 def _download_file(url: str, dest: Path, headers: dict[str, str],
                    max_retries: int = 3) -> None:
-    """Stream-download *url* to *dest* with progress reporting and retries."""
+    """Stream-download *url* to *dest* with progress reporting and retries.
+
+    Skips download entirely if the file already exists and its checksum
+    matches the value stored in configs/checksums.yaml.
+    """
     if dest.exists():
-        print(f"  ✓ Already exists: {dest.name} ({dest.stat().st_size / 1024**2:.1f} MB)")
-        return
+        # Archive exists - verify checksum before deciding to skip
+        if verify_or_populate("mind", dest.name, dest):
+            print(f"  ✓ Already exists and checksum OK: {dest.name} ({dest.stat().st_size / 1024**2:.1f} MB)")
+            return
+        else:
+            # Checksum mismatch - remove corrupt archive and re-download
+            print(f"  Removing corrupt archive: {dest.name}")
+            dest.unlink()
 
     for attempt in range(1, max_retries + 1):
         try:
-            print(f"  ⬇  Downloading {dest.name} (attempt {attempt}/{max_retries}) …")
+            print(f"  ⬇  Downloading {dest.name} (attempt {attempt}/{max_retries}) ...")
             resp = requests.get(url, headers=headers, stream=True, timeout=120)
             resp.raise_for_status()
 
@@ -86,6 +103,9 @@ def _download_file(url: str, dest: Path, headers: dict[str, str],
                         print(f"\r    {downloaded / 1024**2:.1f} MB", end="", flush=True)
 
             print(f"\n  ✓ Saved {dest.name} ({downloaded / 1024**2:.1f} MB)")
+
+            # Compute and persist checksum for the freshly downloaded file
+            verify_or_populate("mind", dest.name, dest)
             return  # success
 
         except (requests.ConnectionError, requests.ChunkedEncodingError) as exc:
@@ -94,7 +114,7 @@ def _download_file(url: str, dest: Path, headers: dict[str, str],
                 dest.unlink()
             if attempt < max_retries:
                 wait = 5 * attempt
-                print(f"\n  ⚠ Connection error: {exc}\n    Retrying in {wait}s …")
+                print(f"\n  ⚠ Connection error: {exc}\n    Retrying in {wait}s ...")
                 import time
                 time.sleep(wait)
             else:
@@ -110,7 +130,7 @@ def _unzip(zip_path: Path, extract_to: Path) -> None:
         print(f"  ✓ Already extracted: {marker.name}/")
         return
 
-    print(f"  📦 Extracting {zip_path.name} → {extract_to.name}/ …")
+    print(f"  📦 Extracting {zip_path.name} -> {extract_to.name}/ ...")
     with zipfile.ZipFile(zip_path, "r") as zf:
         zf.extractall(extract_to)
     print(f"  ✓ Extracted {zip_path.name}")

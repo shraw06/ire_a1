@@ -1,4 +1,4 @@
-# ── Base configuration ──────────────────────────────────────────────
+# Base configuration
 # Shared across all datasets.  Per-dataset configs override specific keys.
 
 seed: 42
@@ -22,6 +22,11 @@ retrieval:
     metric: cosine
     top_k: 100
     nprobe: 10
+
+# Optional: MIND body text enrichment via official news_downloader.py utility.
+# Default: false - body text is OPTIONAL/extra-credit only. See parse_mind.py
+# for the licensing and scope rationale.
+include_mind_body: false
 
 evaluation:
   ndcg_cutoffs: [5, 10]
