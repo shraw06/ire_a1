@@ -23,6 +23,9 @@ build/
 venv/
 env/
 
+# Secrets - never commit the real .env (only .env.example is tracked)
+.env
+
 # IDE
 .vscode/
 .idea/

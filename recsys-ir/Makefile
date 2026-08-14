@@ -1,10 +1,24 @@
-.PHONY: data bm25 embed eval submit clean help
+PYTHON := .venv/bin/python
+
+.PHONY: data download download-mind download-ebnerd bm25 embed eval submit clean help
 
 help: ## Show available targets
-	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-12s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-18s %s\n", $$1, $$2}'
 
-data: ## Download, parse, and split both datasets
-	@echo "🔻 [data] not yet implemented - will download MIND + EB-NeRD, parse to unified schema, temporal-split"
+# Download targets  (download only — no parsing / splitting)
+
+download: download-mind download-ebnerd ## Download both datasets (MIND + EB-NeRD)
+
+download-mind: ## Download & unzip MINDsmall (train + dev)
+	$(PYTHON) -m src.ingestion.download_mind
+
+download-ebnerd: ## Download & unzip EB-NeRD demo bundle
+	$(PYTHON) -m src.ingestion.download_ebnerd
+
+# Full pipeline targets
+
+data: download ## Download, parse, and split both datasets
+	@echo "🔻 [data] parse + split not yet implemented"
 
 bm25: ## Build inverted index and run BM25 retrieval
 	@echo "📖 [bm25] not yet implemented - will build hand-rolled inverted index + BM25 scoring"

@@ -1,0 +1,368 @@
+{
+  "file_listing": [
+    {
+      "path": "MINDsmall_dev/behaviors.tsv",
+      "size_mb": 40.85
+    },
+    {
+      "path": "MINDsmall_dev/entity_embedding.vec",
+      "size_mb": 20.94
+    },
+    {
+      "path": "MINDsmall_dev/news.tsv",
+      "size_mb": 31.97
+    },
+    {
+      "path": "MINDsmall_dev/relation_embedding.vec",
+      "size_mb": 1.0
+    },
+    {
+      "path": "MINDsmall_dev.zip",
+      "size_mb": 29.51
+    },
+    {
+      "path": "MINDsmall_train/behaviors.tsv",
+      "size_mb": 87.76
+    },
+    {
+      "path": "MINDsmall_train/entity_embedding.vec",
+      "size_mb": 24.62
+    },
+    {
+      "path": "MINDsmall_train/news.tsv",
+      "size_mb": 39.29
+    },
+    {
+      "path": "MINDsmall_train/relation_embedding.vec",
+      "size_mb": 1.0
+    },
+    {
+      "path": "MINDsmall_train.zip",
+      "size_mb": 50.5
+    }
+  ],
+  "train_row_counts": {
+    "behaviors.tsv": 156965,
+    "entity_embedding.vec": 26904,
+    "news.tsv": 51282,
+    "relation_embedding.vec": 1091
+  },
+  "train_news_head5": [
+    {
+      "news_id": "N55528",
+      "category": "lifestyle",
+      "subcategory": "lifestyleroyals",
+      "title": "The Brands Queen Elizabeth, Prince Charles, and Prince Philip Swear By",
+      "abstract": "Shop the notebooks, jackets, and more that the royals can't live without.",
+      "url": "https://assets.msn.com/labs/mind/AAGH0ET.html",
+      "title_entities": "[{\"Label\": \"Prince Philip, Duke of Edinburgh\", \"Type\": \"P\", \"WikidataId\": \"Q80976\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [48], \"SurfaceForms\": [\"Prince Philip\"]}, {\"Label\": \"Charles, Prince of Wales\", \"Type\": \"P\", \"WikidataId\": \"Q43274\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [28], \"SurfaceForms\": [\"Prince Charles\"]}, {\"Label\": \"Elizabeth II\", \"Type\": \"P\", \"WikidataId\": \"Q9682\", \"Confidence\": 0.97, \"OccurrenceOffsets\": [11], \"SurfaceForms\": [\"Queen Elizabeth\"]}]",
+      "abstract_entities": "[]"
+    },
+    {
+      "news_id": "N19639",
+      "category": "health",
+      "subcategory": "weightloss",
+      "title": "50 Worst Habits For Belly Fat",
+      "abstract": "These seemingly harmless habits are holding you back and keeping you from shedding that unwanted belly fat for good.",
+      "url": "https://assets.msn.com/labs/mind/AAB19MK.html",
+      "title_entities": "[{\"Label\": \"Adipose tissue\", \"Type\": \"C\", \"WikidataId\": \"Q193583\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [20], \"SurfaceForms\": [\"Belly Fat\"]}]",
+      "abstract_entities": "[{\"Label\": \"Adipose tissue\", \"Type\": \"C\", \"WikidataId\": \"Q193583\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [97], \"SurfaceForms\": [\"belly fat\"]}]"
+    },
+    {
+      "news_id": "N61837",
+      "category": "news",
+      "subcategory": "newsworld",
+      "title": "The Cost of Trump's Aid Freeze in the Trenches of Ukraine's War",
+      "abstract": "Lt. Ivan Molchanets peeked over a parapet of sand bags at the front line of the war in Ukraine. Next to him was an empty helmet propped up to trick snipers, already perforated with multiple holes.",
+      "url": "https://assets.msn.com/labs/mind/AAJgNsz.html",
+      "title_entities": "[]",
+      "abstract_entities": "[{\"Label\": \"Ukraine\", \"Type\": \"G\", \"WikidataId\": \"Q212\", \"Confidence\": 0.946, \"OccurrenceOffsets\": [87], \"SurfaceForms\": [\"Ukraine\"]}]"
+    },
+    {
+      "news_id": "N53526",
+      "category": "health",
+      "subcategory": "voices",
+      "title": "I Was An NBA Wife. Here's How It Affected My Mental Health.",
+      "abstract": "I felt like I was a fraud, and being an NBA wife didn't help that. In fact, it nearly destroyed me.",
+      "url": "https://assets.msn.com/labs/mind/AACk2N6.html",
+      "title_entities": "[]",
+      "abstract_entities": "[{\"Label\": \"National Basketball Association\", \"Type\": \"O\", \"WikidataId\": \"Q155223\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [40], \"SurfaceForms\": [\"NBA\"]}]"
+    },
+    {
+      "news_id": "N38324",
+      "category": "health",
+      "subcategory": "medical",
+      "title": "How to Get Rid of Skin Tags, According to a Dermatologist",
+      "abstract": "They seem harmless, but there's a very good reason you shouldn't ignore them. The post How to Get Rid of Skin Tags, According to a Dermatologist appeared first on Reader's Digest.",
+      "url": "https://assets.msn.com/labs/mind/AAAKEkt.html",
+      "title_entities": "[{\"Label\": \"Skin tag\", \"Type\": \"C\", \"WikidataId\": \"Q3179593\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [18], \"SurfaceForms\": [\"Skin Tags\"]}]",
+      "abstract_entities": "[{\"Label\": \"Skin tag\", \"Type\": \"C\", \"WikidataId\": \"Q3179593\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [105], \"SurfaceForms\": [\"Skin Tags\"]}, {\"Label\": \"Dermatology\", \"Type\": \"C\", \"WikidataId\": \"Q171171\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [131], \"SurfaceForms\": [\"Dermatologist\"]}, {\"Label\": \"Reader's Digest\", \"Type\": \"M\", \"WikidataId\": \"Q371820\", \"Confidence\": 0.999, \"OccurrenceOffsets\": [163], \"SurfaceForms\": [\"Reader's Digest\"]}]"
+    }
+  ],
+  "train_behaviors_head5": [
+    {
+      "impression_id": "1",
+      "user_id": "U13740",
+      "time": "11/11/2019 9:05:58 AM",
+      "history": "N55189 N42782 N34694 N45794 N18445 N63302 N10414 N19347 N31801",
+      "impressions": "N55689-1 N35729-0"
+    },
+    {
+      "impression_id": "2",
+      "user_id": "U91836",
+      "time": "11/12/2019 6:11:30 PM",
+      "history": "N31739 N6072 N63045 N23979 N35656 N43353 N8129 N1569 N17686 N13008 N21623 N6233 N14340 N48031 N62285 N44383 N23061 N16290 N6244 N45099 N58715 N59049 N7023 N50528 N42704 N46082 N8275 N15710 N59026 N8429 N30867 N56514 N19709 N31402 N31741 N54889 N9798 N62612 N2663 N16617 N6087 N13231 N63317 N61388 N59359 N51163 N30698 N34567 N54225 N32852 N55833 N64467 N3142 N13912 N29802 N44462 N29948 N4486 N5398 N14761 N47020 N65112 N31699 N37159 N61101 N14761 N3433 N10438 N61355 N21164 N22976 N2511 N48390 N58224 N48742 N35458 N24611 N37509 N21773 N41011 N19041 N25785",
+      "impressions": "N20678-0 N39317-0 N58114-0 N20495-0 N42977-0 N22407-0 N14592-0 N17059-1 N33677-0 N7821-0 N6890-0"
+    },
+    {
+      "impression_id": "3",
+      "user_id": "U73700",
+      "time": "11/14/2019 7:01:48 AM",
+      "history": "N10732 N25792 N7563 N21087 N41087 N5445 N60384 N46616 N52500 N33164 N47289 N24233 N62058 N26378 N49475 N18870",
+      "impressions": "N50014-0 N23877-0 N35389-0 N49712-0 N16844-0 N59685-0 N23814-1 N23446-0 N64174-0 N11817-0 N60550-0 N48225-0 N45509-0 N56711-0 N46821-0 N48017-0 N8015-0 N5364-0 N48722-0 N55555-0 N37348-0 N40109-0 N59495-0 N36226-0 N38779-0 N47346-0 N48875-0 N10960-0 N29739-0 N50872-0 N50592-0 N13131-0 N3839-0 N12330-0 N47098-0 N51570-0"
+    },
+    {
+      "impression_id": "4",
+      "user_id": "U34670",
+      "time": "11/11/2019 5:28:05 AM",
+      "history": "N45729 N2203 N871 N53880 N41375 N43142 N33013 N29757 N31825 N51891",
+      "impressions": "N35729-0 N33632-0 N49685-1 N27581-0"
+    },
+    {
+      "impression_id": "5",
+      "user_id": "U8125",
+      "time": "11/12/2019 4:11:21 PM",
+      "history": "N10078 N56514 N14904 N33740",
+      "impressions": "N39985-0 N36050-0 N16096-0 N8400-1 N22407-0 N60408-0 N61497-0 N47412-0 N41220-0 N1940-0 N724-0 N11363-0 N261-0 N33883-0 N36807-0 N11967-0 N17896-0 N13486-0 N10413-0 N54274-0 N4247-0 N27497-0 N38512-0 N30253-0 N45389-0 N20015-0 N20678-0 N54003-0 N35850-0 N33261-0 N32010-0 N57426-0 N7419-0 N50023-0 N36446-0 N26940-0 N28495-0 N19318-0 N4936-0 N28414-0 N25108-0 N32791-0 N23563-0 N39317-0 N16166-0 N37058-0 N64851-0 N46992-0 N57327-0 N12995-0 N58363-0 N53084-0 N11094-0 N36436-0 N305-0 N58241-0 N33212-0 N6975-0 N58114-0 N3344-0 N25406-0 N4741-0 N33885-0 N20915-0 N44941-0 N57319-0 N36532-0 N61822-0 N20527-0"
+    }
+  ],
+  "train_timestamp_range": {
+    "min": "2019-11-09T00:00:19",
+    "max": "2019-11-14T23:59:13"
+  },
+  "train_ctr": {
+    "total_impression_article_pairs": 5843444,
+    "positive_clicks": 236344,
+    "ctr": 0.0404
+  },
+  "train_clicks_per_user": {
+    "num_users_with_clicks": 50000,
+    "min": 1,
+    "max": 129,
+    "mean": 4.73,
+    "median": 3,
+    "p75": 6,
+    "p90": 10,
+    "p95": 15,
+    "p99": 28
+  },
+  "train_impressions_per_article": {
+    "num_articles_in_impressions": 20288,
+    "min": 1,
+    "max": 23037,
+    "mean": 288.02,
+    "median": 7,
+    "p75": 31,
+    "p90": 533,
+    "p95": 1609,
+    "top10_articles": [
+      23037,
+      19242,
+      19106,
+      18702,
+      18315,
+      18101,
+      16869,
+      16267,
+      16022,
+      15551
+    ]
+  },
+  "train_missing_text": {
+    "total_articles": 51282,
+    "missing_abstract": 2666,
+    "missing_abstract_pct": 5.2,
+    "missing_title": 0,
+    "missing_title_pct": 0.0
+  },
+  "train_entity_samples": [
+    {
+      "news_id": "N55528",
+      "title_entities": "[{\"Label\": \"Prince Philip, Duke of Edinburgh\", \"Type\": \"P\", \"WikidataId\": \"Q80976\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [48], \"SurfaceForms\": [\"Prince Philip\"]}, {\"Label\": \"Charles, Prince of Wales\", \"Type\": \"P\", \"WikidataId\": \"Q43274\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [28], \"SurfaceForms\": [\"Prince Charles\"]}, {\"Label\": \"Elizabeth II\", \"Type\": \"P\", \"WikidataId\": \"Q9682\", \"Confidence\": 0.97, \"OccurrenceOffsets\": [11], \"SurfaceForms\": [\"Queen Elizabeth\"]}]",
+      "abstract_entities": "[]"
+    },
+    {
+      "news_id": "N19639",
+      "title_entities": "[{\"Label\": \"Adipose tissue\", \"Type\": \"C\", \"WikidataId\": \"Q193583\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [20], \"SurfaceForms\": [\"Belly Fat\"]}]",
+      "abstract_entities": "[{\"Label\": \"Adipose tissue\", \"Type\": \"C\", \"WikidataId\": \"Q193583\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [97], \"SurfaceForms\": [\"belly fat\"]}]"
+    },
+    {
+      "news_id": "N38324",
+      "title_entities": "[{\"Label\": \"Skin tag\", \"Type\": \"C\", \"WikidataId\": \"Q3179593\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [18], \"SurfaceForms\": [\"Skin Tags\"]}]",
+      "abstract_entities": "[{\"Label\": \"Skin tag\", \"Type\": \"C\", \"WikidataId\": \"Q3179593\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [105], \"SurfaceForms\": [\"Skin Tags\"]}, {\"Label\": \"Dermatology\", \"Type\": \"C\", \"WikidataId\": \"Q171171\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [131], \"SurfaceForms\": [\"Dermatologist\"]}, {\"Label\": \"Reader's Digest\", \"Type\": \"M\", \"WikidataId\": \"Q371820\", \"Confidence\": 0.999, \"OccurrenceOffsets\": [163], \"SurfaceForms\": [\"Reader's Digest\"]}]"
+    }
+  ],
+  "dev_row_counts": {
+    "behaviors.tsv": 73152,
+    "entity_embedding.vec": 22893,
+    "news.tsv": 42416,
+    "relation_embedding.vec": 1091
+  },
+  "dev_news_head5": [
+    {
+      "news_id": "N55528",
+      "category": "lifestyle",
+      "subcategory": "lifestyleroyals",
+      "title": "The Brands Queen Elizabeth, Prince Charles, and Prince Philip Swear By",
+      "abstract": "Shop the notebooks, jackets, and more that the royals can't live without.",
+      "url": "https://assets.msn.com/labs/mind/AAGH0ET.html",
+      "title_entities": "[{\"Label\": \"Prince Philip, Duke of Edinburgh\", \"Type\": \"P\", \"WikidataId\": \"Q80976\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [48], \"SurfaceForms\": [\"Prince Philip\"]}, {\"Label\": \"Charles, Prince of Wales\", \"Type\": \"P\", \"WikidataId\": \"Q43274\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [28], \"SurfaceForms\": [\"Prince Charles\"]}, {\"Label\": \"Elizabeth II\", \"Type\": \"P\", \"WikidataId\": \"Q9682\", \"Confidence\": 0.97, \"OccurrenceOffsets\": [11], \"SurfaceForms\": [\"Queen Elizabeth\"]}]",
+      "abstract_entities": "[]"
+    },
+    {
+      "news_id": "N18955",
+      "category": "health",
+      "subcategory": "medical",
+      "title": "Dispose of unwanted prescription drugs during the DEA's Take Back Day",
+      "abstract": "",
+      "url": "https://assets.msn.com/labs/mind/AAISxPN.html",
+      "title_entities": "[{\"Label\": \"Drug Enforcement Administration\", \"Type\": \"O\", \"WikidataId\": \"Q622899\", \"Confidence\": 0.992, \"OccurrenceOffsets\": [50], \"SurfaceForms\": [\"DEA\"]}]",
+      "abstract_entities": "[]"
+    },
+    {
+      "news_id": "N61837",
+      "category": "news",
+      "subcategory": "newsworld",
+      "title": "The Cost of Trump's Aid Freeze in the Trenches of Ukraine's War",
+      "abstract": "Lt. Ivan Molchanets peeked over a parapet of sand bags at the front line of the war in Ukraine. Next to him was an empty helmet propped up to trick snipers, already perforated with multiple holes.",
+      "url": "https://assets.msn.com/labs/mind/AAJgNsz.html",
+      "title_entities": "[]",
+      "abstract_entities": "[{\"Label\": \"Ukraine\", \"Type\": \"G\", \"WikidataId\": \"Q212\", \"Confidence\": 0.946, \"OccurrenceOffsets\": [87], \"SurfaceForms\": [\"Ukraine\"]}]"
+    },
+    {
+      "news_id": "N53526",
+      "category": "health",
+      "subcategory": "voices",
+      "title": "I Was An NBA Wife. Here's How It Affected My Mental Health.",
+      "abstract": "I felt like I was a fraud, and being an NBA wife didn't help that. In fact, it nearly destroyed me.",
+      "url": "https://assets.msn.com/labs/mind/AACk2N6.html",
+      "title_entities": "[]",
+      "abstract_entities": "[{\"Label\": \"National Basketball Association\", \"Type\": \"O\", \"WikidataId\": \"Q155223\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [40], \"SurfaceForms\": [\"NBA\"]}]"
+    },
+    {
+      "news_id": "N38324",
+      "category": "health",
+      "subcategory": "medical",
+      "title": "How to Get Rid of Skin Tags, According to a Dermatologist",
+      "abstract": "They seem harmless, but there's a very good reason you shouldn't ignore them. The post How to Get Rid of Skin Tags, According to a Dermatologist appeared first on Reader's Digest.",
+      "url": "https://assets.msn.com/labs/mind/AAAKEkt.html",
+      "title_entities": "[{\"Label\": \"Skin tag\", \"Type\": \"C\", \"WikidataId\": \"Q3179593\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [18], \"SurfaceForms\": [\"Skin Tags\"]}]",
+      "abstract_entities": "[{\"Label\": \"Skin tag\", \"Type\": \"C\", \"WikidataId\": \"Q3179593\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [105], \"SurfaceForms\": [\"Skin Tags\"]}, {\"Label\": \"Dermatology\", \"Type\": \"C\", \"WikidataId\": \"Q171171\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [131], \"SurfaceForms\": [\"Dermatologist\"]}, {\"Label\": \"Reader's Digest\", \"Type\": \"M\", \"WikidataId\": \"Q371820\", \"Confidence\": 0.999, \"OccurrenceOffsets\": [163], \"SurfaceForms\": [\"Reader's Digest\"]}]"
+    }
+  ],
+  "dev_behaviors_head5": [
+    {
+      "impression_id": "1",
+      "user_id": "U80234",
+      "time": "11/15/2019 12:37:50 PM",
+      "history": "N55189 N46039 N51741 N53234 N11276 N264 N40716 N28088 N43955 N6616 N47686 N63573 N38895 N30924 N35671",
+      "impressions": "N28682-0 N48740-0 N31958-1 N34130-0 N6916-0 N5472-0 N50775-0 N24802-0 N19990-0 N33176-0 N62365-0 N5940-0 N6400-0 N58098-0 N42844-0 N49285-0 N51470-0 N53572-0 N11930-0 N21679-0 N55237-0 N29862-0"
+    },
+    {
+      "impression_id": "2",
+      "user_id": "U60458",
+      "time": "11/15/2019 7:11:50 AM",
+      "history": "N58715 N32109 N51180 N33438 N54827 N28488 N61186 N34775 N33742 N50020 N57061 N30924 N6778",
+      "impressions": "N20036-0 N23513-1 N32536-0 N46976-0 N35216-0 N36779-0 N31958-0"
+    },
+    {
+      "impression_id": "3",
+      "user_id": "U44190",
+      "time": "11/15/2019 9:55:12 AM",
+      "history": "N56253 N1150 N55189 N16233 N61704 N51706 N53033 N15634 N3259",
+      "impressions": "N36779-0 N62365-0 N58098-0 N5472-0 N13408-0 N55036-0 N19990-0 N53283-0 N20036-0 N47383-0 N37352-0 N31958-0 N50775-0 N5940-1 N58251-0 N49285-0 N30290-0 N11930-0 N16680-0 N42844-0 N53572-0 N6916-0 N55237-0"
+    },
+    {
+      "impression_id": "4",
+      "user_id": "U87380",
+      "time": "11/15/2019 3:12:46 PM",
+      "history": "N63554 N49153 N28678 N23232 N43369 N58518 N44402 N7649 N63429 N45794 N53531 N53033 N30765 N34452 N24298 N29361 N2597 N28926 N28247",
+      "impressions": "N6950-0 N60215-0 N6074-0 N11930-0 N6916-0 N24802-0 N48740-0 N60675-0 N45057-0 N51470-0 N62365-0 N15347-1 N21941-0 N49285-0 N29091-0 N6400-0 N19611-0 N52492-0 N29862-0 N19990-0 N38620-0 N60762-0 N34130-0 N1952-0 N53572-0 N4733-0"
+    },
+    {
+      "impression_id": "5",
+      "user_id": "U9444",
+      "time": "11/15/2019 8:25:46 AM",
+      "history": "N51692 N18285 N26015 N22679 N55556",
+      "impressions": "N5940-1 N23513-0 N49285-0 N23355-0 N19990-0 N31958-1 N29393-0 N30290-0 N19611-0 N62365-0 N51470-0 N34130-0 N36779-0 N20036-0"
+    }
+  ],
+  "dev_timestamp_range": {
+    "min": "2019-11-15T00:00:01",
+    "max": "2019-11-15T23:58:03"
+  },
+  "dev_ctr": {
+    "total_impression_article_pairs": 2740998,
+    "positive_clicks": 111383,
+    "ctr": 0.0406
+  },
+  "dev_clicks_per_user": {
+    "num_users_with_clicks": 50000,
+    "min": 1,
+    "max": 33,
+    "mean": 2.23,
+    "median": 1,
+    "p75": 3,
+    "p90": 4,
+    "p95": 6,
+    "p99": 11
+  },
+  "dev_impressions_per_article": {
+    "num_articles_in_impressions": 5369,
+    "min": 1,
+    "max": 47285,
+    "mean": 510.52,
+    "median": 11,
+    "p75": 59,
+    "p90": 631,
+    "p95": 2458,
+    "top10_articles": [
+      47285,
+      39840,
+      36205,
+      36152,
+      34151,
+      32861,
+      32769,
+      32046,
+      29153,
+      27204
+    ]
+  },
+  "dev_missing_text": {
+    "total_articles": 42416,
+    "missing_abstract": 2021,
+    "missing_abstract_pct": 4.76,
+    "missing_title": 0,
+    "missing_title_pct": 0.0
+  },
+  "dev_entity_samples": [
+    {
+      "news_id": "N55528",
+      "title_entities": "[{\"Label\": \"Prince Philip, Duke of Edinburgh\", \"Type\": \"P\", \"WikidataId\": \"Q80976\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [48], \"SurfaceForms\": [\"Prince Philip\"]}, {\"Label\": \"Charles, Prince of Wales\", \"Type\": \"P\", \"WikidataId\": \"Q43274\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [28], \"SurfaceForms\": [\"Prince Charles\"]}, {\"Label\": \"Elizabeth II\", \"Type\": \"P\", \"WikidataId\": \"Q9682\", \"Confidence\": 0.97, \"OccurrenceOffsets\": [11], \"SurfaceForms\": [\"Queen Elizabeth\"]}]",
+      "abstract_entities": "[]"
+    },
+    {
+      "news_id": "N18955",
+      "title_entities": "[{\"Label\": \"Drug Enforcement Administration\", \"Type\": \"O\", \"WikidataId\": \"Q622899\", \"Confidence\": 0.992, \"OccurrenceOffsets\": [50], \"SurfaceForms\": [\"DEA\"]}]",
+      "abstract_entities": "[]"
+    },
+    {
+      "news_id": "N38324",
+      "title_entities": "[{\"Label\": \"Skin tag\", \"Type\": \"C\", \"WikidataId\": \"Q3179593\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [18], \"SurfaceForms\": [\"Skin Tags\"]}]",
+      "abstract_entities": "[{\"Label\": \"Skin tag\", \"Type\": \"C\", \"WikidataId\": \"Q3179593\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [105], \"SurfaceForms\": [\"Skin Tags\"]}, {\"Label\": \"Dermatology\", \"Type\": \"C\", \"WikidataId\": \"Q171171\", \"Confidence\": 1.0, \"OccurrenceOffsets\": [131], \"SurfaceForms\": [\"Dermatologist\"]}, {\"Label\": \"Reader's Digest\", \"Type\": \"M\", \"WikidataId\": \"Q371820\", \"Confidence\": 0.999, \"OccurrenceOffsets\": [163], \"SurfaceForms\": [\"Reader's Digest\"]}]"
+    }
+  ],
+  "entity_embedding_dim": 100,
+  "relation_embedding_dim": 100
+}
