@@ -9,8 +9,8 @@ Lexical (BM25) and semantic (embedding) retrieval + evaluation on **MIND** (Engl
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]" #review
 
-# 2. Download data, parse, split, retrieve, evaluate
-make data      # download + parse + temporal split
+# 2. Download data, parse, split, build features, retrieve, evaluate
+make data      # download + parse + temporal split + feature stores (~14s on MIND-small + EB-NeRD demo)
 make bm25      # hand-built inverted index + BM25 scoring
 make embed     # load / compute embeddings + ANN retrieval
 make eval       # AUC, MRR, nDCG@{5,10}, diversity, novelty, coverage
@@ -19,6 +19,18 @@ make submit    # Codabench prediction files
 
 > **Note:** `make data` requires internet access for initial dataset downloads.
 > After the first run, all pipeline stages work offline.
+> Re-runs are idempotent (each target skips if outputs exist; use `FORCE=1 make data` to rebuild).
+
+### Pipeline timing (`make data` on real data, single run)
+
+| Stage | Wall-clock |
+|-------|-----------|
+| Download | skipped (cached) |
+| Parse | skipped (cached) |
+| Split | ~1s |
+| Features (MIND-small: 65K articles, 94K users) | ~6s |
+| Features (EB-NeRD demo: 12K articles, 2K users) | ~7s |
+| **Total** | **~14s** |
 
 ## Repository Layout
 

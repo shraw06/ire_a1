@@ -55,3 +55,14 @@ Each entry should follow this template:
 - **Output Summary:** Created `src/splitting/temporal_split.py` to assign temporal splits, `tests/test_split_no_leakage.py` for comprehensive leakage testing, and updated `src/common/schema.py` to include the `split` column.
 - **Disposition:** Accepted with edits
 - **Edits Made:** Prompted to update `Makefile` targets to include `parse` and `split` operations and run `make split` to process the datasets.
+
+---
+
+### 2026-08-15 16:25 - Feature Store Implementation
+
+- **Tool / Model:** Antigravity (Gemini / Claude)
+- **Prompt / Task:** Build a queryable feature store over the unified schema, backed by Parquet files queried through DuckDB. Implement `store_backend.py`, `article_store.py` (with `cleaned_text` for BM25), and `user_store.py` (with strict `as_of_ts` filtering for EB-NeRD and pass-through for MIND to prevent data leakage). Include a build CLI and idempotent Makefile targets. Test timestamp filtering and end-to-end pipeline execution, and update design documentation.
+- **Output Summary:** Created `src/feature_store/store_backend.py`, `article_store.py`, `user_store.py`, and `build_features.py`. Updated `Makefile` with idempotent targets (download, parse, split, features). Added `tests/test_user_history_filtering.py` and `tests/test_pipeline_e2e_smoke.py`. Updated `design.md` with sections 7-11 explaining the feature store backend choices, text scope, embedding strategy, filtering logic, and Makefile idempotency.
+- **Edits Made:** Fixed a bug in `test_pipeline_e2e_smoke.py` where synthetic data generation did not initially produce behaviors in the validation split by adjusting the synthetic timestamps to explicitly cross train, val, and test boundaries. Simplified the Makefile's idempotency check for the split target by using a marker file (`.split_done`) to prevent multi-line bash escaping issues. Updated `README.md` to reflect pipeline timings.
+
+
