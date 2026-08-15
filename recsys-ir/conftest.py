@@ -1,4 +1,4 @@
-"""Root pytest conftest — ensures the project root is on sys.path.
+"""Root pytest conftest - ensures the project root is on sys.path.
 
 This allows 'from src.X import Y' to work in tests regardless of whether
 the package has been installed in editable mode (pip install -e .).

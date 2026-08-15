@@ -30,9 +30,15 @@ _ARTICLES_COLUMNS = {
     "category", "subcategory", "entities", "published_at", "embedding_ref",
 }
 
-_BEHAVIORS_COLUMNS = {
+# Base behaviors columns (always present after parsing)
+_BEHAVIORS_COLUMNS_BASE = {
     "impression_id", "dataset", "user_id", "timestamp",
     "clicked_history", "candidates", "labels",
+}
+
+# Optional columns added by later pipeline stages
+_BEHAVIORS_COLUMNS_OPTIONAL = {
+    "split",  # added by temporal_split.py
 }
 
 _USERS_COLUMNS = {
@@ -102,10 +108,20 @@ class TestSchemaColumns:
         assert set(ebnerd_articles.columns) == _ARTICLES_COLUMNS
 
     def test_mind_behaviors_columns(self, mind_behaviors: pl.DataFrame) -> None:
-        assert set(mind_behaviors.columns) == _BEHAVIORS_COLUMNS
+        actual = set(mind_behaviors.columns)
+        assert actual >= _BEHAVIORS_COLUMNS_BASE, (
+            f"Missing base columns: {_BEHAVIORS_COLUMNS_BASE - actual}"
+        )
+        extra = actual - _BEHAVIORS_COLUMNS_BASE - _BEHAVIORS_COLUMNS_OPTIONAL
+        assert not extra, f"Unexpected columns: {extra}"
 
     def test_ebnerd_behaviors_columns(self, ebnerd_behaviors: pl.DataFrame) -> None:
-        assert set(ebnerd_behaviors.columns) == _BEHAVIORS_COLUMNS
+        actual = set(ebnerd_behaviors.columns)
+        assert actual >= _BEHAVIORS_COLUMNS_BASE, (
+            f"Missing base columns: {_BEHAVIORS_COLUMNS_BASE - actual}"
+        )
+        extra = actual - _BEHAVIORS_COLUMNS_BASE - _BEHAVIORS_COLUMNS_OPTIONAL
+        assert not extra, f"Unexpected columns: {extra}"
 
     def test_mind_users_columns(self, mind_users: pl.DataFrame) -> None:
         assert set(mind_users.columns) == _USERS_COLUMNS

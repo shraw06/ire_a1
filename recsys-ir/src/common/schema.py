@@ -146,6 +146,9 @@ BEHAVIORS_SCHEMA = {
     "candidates": pl.Utf8,
     # labels stored as JSON string (list of ints)
     "labels": pl.Utf8,
+    # split: added by temporal_split.py - "train", "val", or "test".
+    # Optional before splitting; present after running the split step.
+    "split": pl.Utf8,
 }
 
 USERS_SCHEMA = {

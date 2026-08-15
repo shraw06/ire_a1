@@ -45,3 +45,13 @@ Each entry should follow this template:
 - **Output Summary:** Created `src/common/schema.py`, `src/parsing/parse_mind.py`, and `src/parsing/parse_ebnerd.py` to parse raw data into unified interim parquet files (`articles`, `behaviors`, `users`). Added `configs/checksums.yaml` and `src/ingestion/checksums.py` to handle SHA-256 validation. Updated `download_mind.py` and `download_ebnerd.py` to use `verify_or_populate`. Created `test_schema.py` to validate parity and known differences.
 - **Disposition:** Accepted with edits
 - **Edits Made:** Instructed model to fix CSV quoting issues (`quote_char=None`) in MIND parser when encountering unescaped quotes. Fixed import errors by adding a root `conftest.py` for testing and modifying `download_*.py` scripts to use relative imports with a `sys.path` fallback for direct execution. Fixed `pyproject.toml` build backend to allow editable installs (`pip install -e .`).
+
+---
+
+### 2026-08-15 16:02 - Temporal Splitting Implementation
+
+- **Tool / Model:** Antigravity (Claude / Gemini)
+- **Prompt / Task:** Implement temporal train/val/test splitting for both MIND and EB-NeRD datasets. Use native held-out file as AS-IS TEST set, and carve out last 1 day of native TRAIN as our VAL set. Persist split directly to behaviors DataFrame. Ensure no data leakage (no future impressions in training data).
+- **Output Summary:** Created `src/splitting/temporal_split.py` to assign temporal splits, `tests/test_split_no_leakage.py` for comprehensive leakage testing, and updated `src/common/schema.py` to include the `split` column.
+- **Disposition:** Accepted with edits
+- **Edits Made:** Prompted to update `Makefile` targets to include `parse` and `split` operations and run `make split` to process the datasets.
