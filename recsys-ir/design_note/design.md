@@ -104,3 +104,11 @@ This document outlines the core design decisions made when unifying the MIND (TS
 - `make clean` removes all intermediate outputs and the marker file, resetting the pipeline to a clean state.
 - Idempotent re-runs complete in ~5ms (all skips); a fresh `make data` on real MIND-small + EB-NeRD demo data takes ~14s.
 
+## 12. Hand-Built BM25 Retrieval Engine
+
+**The Challenge:** The assignment required building an inverted index over article text from scratch, not just calling a library like `rank_bm25`. Pure Python implementation of BM25 over 120k articles is slow, especially when processing 30k+ impressions.
+
+**The Decision:**
+- Implemented a custom `InvertedIndex` and `BM25Engine` in `src/retrieval/bm25.py`.
+- `rank_bm25` is only used in tests (`tests/test_bm25_matches_reference.py`) to mathematically validate the custom IDF and scoring formulas (matching ATIRE/Lucene variant exactly).
+- **Optimization:** Instead of iterating over the full postings list for every query term, the engine supports candidate-restricted scoring. It precomputes a per-document term-frequency lookup and caches the IDF table on the index. When scoring the ~40 candidates per impression, it accesses `O(|candidates| × |query_terms|)` instead of `O(postings_len)`, achieving ~4x speedup on MIND, making the pure-Python ablation runs feasible.

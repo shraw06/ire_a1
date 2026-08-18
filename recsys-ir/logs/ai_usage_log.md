@@ -65,4 +65,12 @@ Each entry should follow this template:
 - **Output Summary:** Created `src/feature_store/store_backend.py`, `article_store.py`, `user_store.py`, and `build_features.py`. Updated `Makefile` with idempotent targets (download, parse, split, features). Added `tests/test_user_history_filtering.py` and `tests/test_pipeline_e2e_smoke.py`. Updated `design.md` with sections 7-11 explaining the feature store backend choices, text scope, embedding strategy, filtering logic, and Makefile idempotency.
 - **Edits Made:** Fixed a bug in `test_pipeline_e2e_smoke.py` where synthetic data generation did not initially produce behaviors in the validation split by adjusting the synthetic timestamps to explicitly cross train, val, and test boundaries. Simplified the Makefile's idempotency check for the split target by using a marker file (`.split_done`) to prevent multi-line bash escaping issues. Updated `README.md` to reflect pipeline timings.
 
+---
 
+### 2026-08-17 14:03 - Hand-Built BM25 Retrieval Pipeline
+
+- **Tool / Model:** Gemini 3.1 Pro (High) / Claude Opus 4.6 (Thinking)
+- **Prompt / Task:** Build a hand-crafted inverted index and BM25 scoring engine over article TITLE+ABSTRACT for both MIND (English) and EB-NeRD (Danish) datasets. Validate against `rank_bm25` reference, run 4-way ablation (±stopwords × ±stemming), restrict scoring to per-impression candidates, and evaluate recall@K (K=50, 100, 200).
+- **Output Summary:** Created `src/retrieval/bm25.py` with custom `InvertedIndex` and `bm25_score_query` optimized for candidate-restricted scoring (O(candidates × query_terms)). Created pipeline runner `src/retrieval/run_bm25.py` performing 4-way ablations and deduplicating query tokens. Added tests `test_bm25_matches_reference.py` and `test_bm25_recall_sane.py`. Results showed stopwords improve MIND recall by ~1.9pp, while stemming is neutral. EB-NeRD maxes out due to small candidate lists. Scored candidates persisted to Parquet.
+- **Disposition:** Accepted as-is
+- **Edits Made:** No edits made.

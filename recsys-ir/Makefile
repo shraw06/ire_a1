@@ -76,7 +76,11 @@ data: download parse split features ## Download, parse, split, and build feature
 # Downstream pipeline (not yet implemented)
 
 bm25: ## Build inverted index and run BM25 retrieval
-	@echo "📖 [bm25] not yet implemented - will build hand-rolled inverted index + BM25 scoring"
+	@if [ "$(FORCE)" = "0" ] && [ -f results/bm25_recall.csv ]; then \
+		echo "  ✓ BM25 results already present — skipping (use FORCE=1 to re-run)"; \
+	else \
+		$(PYTHON) -m src.retrieval.run_bm25 --dataset all; \
+	fi
 
 embed: ## Compute/load embeddings and run ANN retrieval
 	@echo "🧠 [embed] not yet implemented - will load/compute article embeddings + FAISS ANN search"

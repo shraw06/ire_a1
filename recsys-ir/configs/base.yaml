@@ -17,7 +17,10 @@ retrieval:
   bm25:
     k1: 1.5
     b:  0.75
-    top_k: 100
+    top_k: [50, 100, 200]    # recall@K cutoffs
+    history_cap: 20           # max history articles for query construction
+    use_stopwords: true       # ablation toggle (default)
+    use_stemming: false       # ablation toggle (default)
   ann:
     metric: cosine
     top_k: 100
