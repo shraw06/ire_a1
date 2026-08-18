@@ -83,13 +83,31 @@ bm25: ## Build inverted index and run BM25 retrieval
 	fi
 
 embed: ## Compute/load embeddings and run ANN retrieval
-	@echo "🧠 [embed] not yet implemented - will load/compute article embeddings + FAISS ANN search"
+	@if [ "$(FORCE)" = "0" ] && [ -f results/embed_recall.csv ]; then \
+		echo "  ✓ Embedding results already present — skipping (use FORCE=1 to re-run)"; \
+	else \
+		$(PYTHON) -m src.retrieval.run_embeddings --dataset all; \
+	fi
+
+compare: ## Compare lexical vs semantic retrieval
+	@if [ "$(FORCE)" = "0" ] && [ -f results/lexical_vs_semantic.csv ]; then \
+		echo "  ✓ Comparison results already present — skipping (use FORCE=1 to re-run)"; \
+	else \
+		$(PYTHON) -m src.evaluation.compare_retrievers; \
+	fi
 
 eval: ## Evaluate all retrieval runs
-	@echo "📊 [eval] not yet implemented - will compute AUC, MRR, nDCG@{5,10}, diversity, novelty, coverage"
+	@if [ "$(FORCE)" = "0" ] && [ -f results/eval_summary.csv ]; then \
+		echo "  ✓ Evaluation results already present — skipping (use FORCE=1 to re-run)"; \
+	else \
+		$(PYTHON) -m src.evaluation.run_eval; \
+	fi
 
 submit: ## Generate Codabench submission files
 	@echo "📦 [submit] not yet implemented - will produce prediction files in Codabench format"
+
+test: ## Run unit tests and anti-leakage tests
+	$(PYTHON) -m pytest tests/ src/evaluation/leakage_test.py -v
 
 clean: ## Remove processed data and caches
 	rm -rf data/interim/mind/ data/interim/ebnerd/
