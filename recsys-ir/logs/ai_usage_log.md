@@ -74,3 +74,23 @@ Each entry should follow this template:
 - **Output Summary:** Created `src/retrieval/bm25.py` with custom `InvertedIndex` and `bm25_score_query` optimized for candidate-restricted scoring (O(candidates × query_terms)). Created pipeline runner `src/retrieval/run_bm25.py` performing 4-way ablations and deduplicating query tokens. Added tests `test_bm25_matches_reference.py` and `test_bm25_recall_sane.py`. Results showed stopwords improve MIND recall by ~1.9pp, while stemming is neutral. EB-NeRD maxes out due to small candidate lists. Scored candidates persisted to Parquet.
 - **Disposition:** Accepted as-is
 - **Edits Made:** No edits made.
+
+---
+
+### 2026-08-18 10:15 - Semantic Retrieval & Lexical vs Semantic Comparison
+
+- **Tool / Model:** Gemini 3.1 Pro (High)
+- **Prompt / Task:** Implement an embedding-based retrieval pipeline for MIND (MiniLM) and EB-NeRD (Word2Vec) datasets using an efficient indexing system (FAISS or NumPy fallback). Evaluate recall@K on the validation split and conduct a comparative analysis against the lexical BM25 baseline, slicing performance by user warmth and article popularity.
+- **Output Summary:** Created `src/retrieval/run_embeddings.py` to load semantic representations and perform vector similarity search to generate ranked candidates. Created `src/evaluation/compare_retrievers.py` to merge BM25 and embedding results, classify impressions into cold/warm and tail/head slices, and output the results to `results/lexical_vs_semantic.csv` along with a comparison plot.
+- **Disposition:** Accepted as-is
+- **Edits Made:** No edits made.
+
+---
+
+### 2026-08-19 16:40 - Evaluation Harness Metrics & Reliability Fixes
+
+- **Tool / Model:** Gemini 3.1 Pro (High)
+- **Prompt / Task:** Fix evaluation harness output reliability before finalizing the design note. Specifically, diagnose saturated recall@100 metrics, calculate candidate pool sizes, add recall@5/10, correct BM25 ILD calculation to use embeddings, fix Bootstrap CIs being blank for small/degenerate slices, and explicitly document the ILD comparability caveat in the design note.
+- **Output Summary:** Created `src/evaluation/candidate_pool_sizes.py` verifying candidate pools were smaller than K=100. Updated `compare_retrievers.py` to calculate and plot highly discriminative `recall@5` and `recall@10` metrics. Modified `run_eval.py` to properly pass embeddings to BM25 evaluation for valid ILD metrics and fixed the degenerate slice CI logic so that slices <1% or >99% return `"insufficient_n"`, while specifically protecting the `"all"` baseline from being incorrectly flagged. Appended Section 13 to `design.md` detailing why absolute ILD magnitudes aren't comparable across different embedding spaces.
+- **Disposition:** Accepted with edits
+- **Edits Made:** Required a follow-up prompt to fix a bug where the `"all"` slice was being flagged as degenerate because it represented 1.0 (100%) of the population, leading to its CIs being incorrectly skipped. Also explicitly instructed to report `recall@5` alongside `recall@10` due to EB-NeRD's extremely small median candidate pool.

@@ -112,3 +112,12 @@ This document outlines the core design decisions made when unifying the MIND (TS
 - Implemented a custom `InvertedIndex` and `BM25Engine` in `src/retrieval/bm25.py`.
 - `rank_bm25` is only used in tests (`tests/test_bm25_matches_reference.py`) to mathematically validate the custom IDF and scoring formulas (matching ATIRE/Lucene variant exactly).
 - **Optimization:** Instead of iterating over the full postings list for every query term, the engine supports candidate-restricted scoring. It precomputes a per-document term-frequency lookup and caches the IDF table on the index. When scoring the ~40 candidates per impression, it accesses `O(|candidates| × |query_terms|)` instead of `O(postings_len)`, achieving ~4x speedup on MIND, making the pure-Python ablation runs feasible.
+
+## 13. Evaluation Metrics and Intra-List Diversity (ILD) Caveat
+
+**The Challenge:** Comparing diversity (ILD) metrics across two fundamentally different datasets and embedding models.
+**The Decision:**
+- MIND uses MiniLM embeddings, while EB-NeRD uses Word2Vec embeddings.
+- Different embedding models produce different baseline cosine-similarity geometries in their vector spaces.
+- As a result, the **absolute ILD magnitudes are not comparable across datasets**. An ILD of ~0.94 on MIND versus ~0.18 on EB-NeRD does *not* imply that MIND recommendations are "5x more diverse". 
+- Only the **within-dataset** BM25-vs-embeddings comparison (e.g., MIND BM25 vs MIND Embeddings) is mathematically sound and meaningful for drawing conclusions.

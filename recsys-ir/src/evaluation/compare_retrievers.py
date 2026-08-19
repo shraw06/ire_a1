@@ -41,7 +41,7 @@ COLD_USER_THRESHOLD = 5
 # Tail article: ≤10 impressions (median is ~7-15 per EDA §5)
 TAIL_ARTICLE_THRESHOLD = 10
 
-RECALL_KS = [50, 100, 200]
+RECALL_KS = [5, 10, 50, 100, 200]
 
 
 def _load_article_popularity(dataset: str) -> dict[str, int]:
@@ -259,12 +259,13 @@ def plot_comparison(csv_path: Path | None = None) -> Path:
         for r in reader:
             rows.append(r)
 
-    # Filter to K=100 (the middle cutoff — most informative)
-    k100_rows = [r for r in rows if int(r["K"]) == 100]
+    # Filter to K=10 (the most informative due to saturation at higher Ks)
+    target_k = 10
+    k_rows = [r for r in rows if int(r["K"]) == target_k]
 
     # Group by dataset × embed_model
     groups: dict[str, list[dict]] = {}
-    for r in k100_rows:
+    for r in k_rows:
         key = f"{r['dataset']}_{r['embed_model']}"
         if key not in groups:
             groups[key] = []
@@ -276,7 +277,7 @@ def plot_comparison(csv_path: Path | None = None) -> Path:
         return csv_path
 
     fig, axes = plt.subplots(1, n_groups, figsize=(6 * n_groups, 5), squeeze=False)
-    fig.suptitle("Lexical (BM25) vs. Semantic (Embedding) Retrieval — Recall@100", fontsize=14, fontweight="bold")
+    fig.suptitle(f"Lexical (BM25) vs. Semantic (Embedding) Retrieval — Recall@{target_k}", fontsize=14, fontweight="bold")
 
     slice_order = ["all", "cold", "warm", "tail", "head"]
     slice_labels = ["All", "Cold\nUsers", "Warm\nUsers", "Tail\nArticles", "Head\nArticles"]
@@ -310,7 +311,7 @@ def plot_comparison(csv_path: Path | None = None) -> Path:
         ax.set_title(f"{dataset_name.upper()} — {model_name}", fontsize=12)
         ax.set_xticks(x)
         ax.set_xticklabels(slice_labels, fontsize=9)
-        ax.set_ylabel("Recall@100")
+        ax.set_ylabel(f"Recall@{target_k}")
         ax.set_ylim(0, 1.05)
         ax.legend(loc="lower right", fontsize=8)
         ax.grid(axis="y", alpha=0.3)
@@ -347,16 +348,19 @@ def main() -> None:
         reader = csv.DictReader(f)
         rows = list(reader)
 
-    # Print table for K=100
-    k100 = [r for r in rows if int(r["K"]) == 100]
-    print(f"\n{'Dataset':<10} {'Model':<10} {'Slice':<12} {'BM25':<10} {'Embed':<10} {'Winner':<10}")
-    print(f"{'-'*62}")
-    for r in k100:
-        winner = "BM25" if int(r["bm25_wins"]) == 1 else "Embed"
-        print(
-            f"{r['dataset']:<10} {r['embed_model']:<10} {r['slice']:<12} "
-            f"{float(r['bm25_recall']):<10.4f} {float(r['embed_recall']):<10.4f} {winner:<10}"
-        )
+    # Print table for K=10 and K=100
+    target_ks_print = [10, 100]
+    for target_k_p in target_ks_print:
+        print(f"\nRecall@{target_k_p}")
+        k_rows = [r for r in rows if int(r["K"]) == target_k_p]
+        print(f"{'Dataset':<10} {'Model':<10} {'Slice':<12} {'BM25':<10} {'Embed':<10} {'Winner':<10}")
+        print(f"{'-'*62}")
+        for r in k_rows:
+            winner = "BM25" if int(r["bm25_wins"]) == 1 else "Embed"
+            print(
+                f"{r['dataset']:<10} {r['embed_model']:<10} {r['slice']:<12} "
+                f"{float(r['bm25_recall']):<10.4f} {float(r['embed_recall']):<10.4f} {winner:<10}"
+            )
 
     print(f"\n{'='*90}")
     print(f"CSV: {csv_path}")

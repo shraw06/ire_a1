@@ -211,7 +211,7 @@ def aggregate_and_bootstrap_proper(records: list[dict], catalog_sizes: dict[str,
             coverage = compute_coverage(all_rec, c_size)
             
             frac = n / total_n
-            degenerate = (frac < 0.01) or (frac > 0.99)
+            degenerate = ((frac < 0.01) or (frac > 0.99)) and slice_desc != "all"
             
             row_dict = {
                 "dataset": dataset,
@@ -222,11 +222,12 @@ def aggregate_and_bootstrap_proper(records: list[dict], catalog_sizes: dict[str,
                 "Coverage": coverage,
             }
             
+            row_dict["flagged_small_slice"] = degenerate
             for m in metrics:
                 vals = np.array([r[m] for r in sub_recs])
                 if degenerate or len(vals) < 2:
                     mean_val = float(np.mean(vals)) if len(vals) > 0 else 0.0
-                    ci_low, ci_high = None, None
+                    ci_low, ci_high = "insufficient_n", "insufficient_n"
                 else:
                     mean_val, ci_low, ci_high = compute_bootstrap_ci(vals, b=1000)
                     
@@ -256,20 +257,22 @@ def main():
         
         catalog_sizes[dataset] = len(full_pop)
         
+        # Load embeddings once for both retrievers so BM25 can compute ILD
+        model = "minilm" if dataset == "mind" else "w2v"
+        embs = load_embeddings(dataset, model)
+        
         # BM25
         bm25_path = _PROJECT_ROOT / "data" / "processed" / f"bm25_scores_{dataset}_title_abstract.parquet"
         if bm25_path.exists():
             df = pl.read_parquet(bm25_path)
-            u, l = evaluate_retriever(dataset, "bm25", df, train_pop, full_pop, user_hist, {})
+            u, l = evaluate_retriever(dataset, "bm25", df, train_pop, full_pop, user_hist, embs)
             all_unleaked.extend(u)
             all_leaked.extend(l)
             
         # Embeddings
-        model = "minilm" if dataset == "mind" else "w2v"
         embed_path = _PROJECT_ROOT / "data" / "processed" / f"embed_scores_{dataset}_{model}.parquet"
         if embed_path.exists():
             df = pl.read_parquet(embed_path)
-            embs = load_embeddings(dataset, model)
             u, l = evaluate_retriever(dataset, f"embed_{model}", df, train_pop, full_pop, user_hist, embs)
             all_unleaked.extend(u)
             all_leaked.extend(l)
