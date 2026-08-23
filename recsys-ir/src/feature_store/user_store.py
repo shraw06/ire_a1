@@ -53,9 +53,10 @@ class UserFeatureStore:
         features = store.get_user_features("U123", as_of_ts, "mind")
     """
 
-    def __init__(self, dataset: str, processed_dir: Path | None = None) -> None:
+    def __init__(self, dataset: str, processed_dir: Path | None = None, scale: str = "small") -> None:
         if processed_dir is None:
-            processed_dir = _PROJECT_ROOT / "data" / "processed" / dataset
+            from src.common.paths import processed_dir as scale_processed_dir
+            processed_dir = scale_processed_dir(dataset, scale)
         self._path = processed_dir / "user_features.parquet"
         if not self._path.exists():
             raise FileNotFoundError(

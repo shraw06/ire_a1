@@ -1,117 +1,138 @@
 PYTHON := .venv/bin/python
-
-# Idempotency: each target checks for its output file(s) and skips
-# work if already present, unless FORCE=1 is set.
-#   make data          → runs only missing stages
-#   FORCE=1 make data  → reruns everything
 FORCE ?= 0
+DATA_SCALE ?= small
 
-.PHONY: data download download-mind download-ebnerd parse parse-mind parse-ebnerd split features bm25 embed eval submit clean help
+ifeq ($(DATA_SCALE),large)
+INTERIM_MARKER := data/interim/large/.split_done
+else
+INTERIM_MARKER := data/interim/.split_done
+endif
+
+.PHONY: data download download-mind download-ebnerd download-large download-large-mind download-large-ebnerd \
+        parse parse-mind parse-ebnerd split features bm25 embed compare eval \
+        submit submit-mind submit-ebnerd validate-mind validate-ebnerd test clean help
 
 help: ## Show available targets
-	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-18s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-# ── Download targets ───────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Data acquisition
+# ---------------------------------------------------------------------------
 
-download: download-mind download-ebnerd ## Download both datasets (MIND + EB-NeRD)
+download: ## Download development datasets (small/demo)
+	$(MAKE) download-mind download-ebnerd
 
 download-mind: ## Download & unzip MINDsmall (train + dev)
 	@if [ "$(FORCE)" = "0" ] && [ -d data/raw/mind/MINDsmall_train ] && [ -d data/raw/mind/MINDsmall_dev ]; then \
-		echo "  ✓ MIND raw data already present — skipping download (use FORCE=1 to re-download)"; \
-	else \
-		$(PYTHON) -m src.ingestion.download_mind; \
-	fi
+		echo "  ✓ MIND raw data already present — skipping"; \
+	else $(PYTHON) -m src.ingestion.download_mind; fi
 
 download-ebnerd: ## Download & unzip EB-NeRD demo bundle
-	@if [ "$(FORCE)" = "0" ] && [ -d data/raw/ebnerd/train ] && [ -d data/raw/ebnerd/validation ]; then \
-		echo "  ✓ EB-NeRD raw data already present — skipping download (use FORCE=1 to re-download)"; \
+	@if [ "$(FORCE)" = "0" ] && [ -d data/raw/ebnerd/ebnerd_demo ]; then \
+		echo "  ✓ EB-NeRD demo already present — skipping"; \
+	else $(PYTHON) -m src.ingestion.download_ebnerd; fi
+
+download-large: ## Download large MIND + EB-NeRD train/dev/test artifacts required for final evaluation/submission
+	$(PYTHON) -m src.ingestion.download_large --dataset all
+
+download-large-mind: ## Download MIND large train/dev/test
+	$(PYTHON) -m src.ingestion.download_large --dataset mind
+
+download-large-ebnerd: ## Download EB-NeRD large train/validation + test + embeddings
+	$(PYTHON) -m src.ingestion.download_large --dataset ebnerd
+
+# ---------------------------------------------------------------------------
+# Unified one-command pipeline
+# ---------------------------------------------------------------------------
+
+data: download-if-needed parse split features ## One-command build of the selected data scale
+	@echo ""
+	@echo "✓ DATA PIPELINE COMPLETE (scale=$(DATA_SCALE))"
+
+.PHONY: download-if-needed
+download-if-needed:
+	@if [ "$(DATA_SCALE)" = "large" ]; then \
+		$(MAKE) download-large; \
 	else \
-		$(PYTHON) -m src.ingestion.download_ebnerd; \
+		$(MAKE) download; \
 	fi
 
-# Parse targets
+parse: parse-mind parse-ebnerd ## Parse both datasets at DATA_SCALE
 
-parse: parse-mind parse-ebnerd ## Parse both datasets into unified schema
+parse-mind: ## Parse MIND train/dev at DATA_SCALE into scale-specific interim Parquet
+	@if [ "$(FORCE)" = "0" ]; then \
+		if [ "$(DATA_SCALE)" = "large" ] && [ -f data/interim/large/mind/.parse_complete ]; then \
+			echo "  ✓ MIND large interim already complete — skipping"; \
+		elif [ "$(DATA_SCALE)" = "small" ] && [ -f data/interim/mind/articles.parquet ] && [ -f data/interim/mind/behaviors.parquet ]; then \
+			echo "  ✓ MIND small interim already present — skipping"; \
+		else $(PYTHON) -m src.parsing.parse_mind --scale $(DATA_SCALE); fi; \
+	else $(PYTHON) -m src.parsing.parse_mind --scale $(DATA_SCALE); fi
 
-parse-mind: ## Parse MIND TSV → interim Parquet
-	@if [ "$(FORCE)" = "0" ] && [ -f data/interim/mind/articles.parquet ] && [ -f data/interim/mind/behaviors.parquet ]; then \
-		echo "  ✓ MIND interim data already present — skipping parse (use FORCE=1 to re-parse)"; \
-	else \
-		$(PYTHON) -m src.parsing.parse_mind; \
-	fi
+parse-ebnerd: ## Parse EB-NeRD train/validation at DATA_SCALE into scale-specific interim Parquet
+	@if [ "$(FORCE)" = "0" ]; then \
+		if [ "$(DATA_SCALE)" = "large" ] && [ -f data/interim/large/ebnerd/.parse_complete ]; then \
+			echo "  ✓ EB-NeRD large interim already complete — skipping"; \
+		elif [ "$(DATA_SCALE)" = "small" ] && [ -f data/interim/ebnerd/articles.parquet ] && [ -f data/interim/ebnerd/behaviors.parquet ]; then \
+			echo "  ✓ EB-NeRD small interim already present — skipping"; \
+		else $(PYTHON) -m src.parsing.parse_ebnerd --scale $(DATA_SCALE); fi; \
+	else $(PYTHON) -m src.parsing.parse_ebnerd --scale $(DATA_SCALE); fi
 
-parse-ebnerd: ## Parse EB-NeRD Parquet → interim Parquet
-	@if [ "$(FORCE)" = "0" ] && [ -f data/interim/ebnerd/articles.parquet ] && [ -f data/interim/ebnerd/behaviors.parquet ]; then \
-		echo "  ✓ EB-NeRD interim data already present — skipping parse (use FORCE=1 to re-parse)"; \
-	else \
-		$(PYTHON) -m src.parsing.parse_ebnerd; \
-	fi
+split: ## Assign temporal train/val/test splits at DATA_SCALE
+	@if [ "$(FORCE)" = "0" ] && [ -f "$(INTERIM_MARKER)" ]; then \
+		echo "  ✓ Split already present for $(DATA_SCALE) — skipping"; \
+	else mkdir -p "$$(dirname $(INTERIM_MARKER))"; $(PYTHON) -m src.splitting.temporal_split --dataset all --scale $(DATA_SCALE) && touch "$(INTERIM_MARKER)"; fi
 
-# Split target
+features: ## Build article + user feature stores at DATA_SCALE
+	$(PYTHON) -m src.feature_store.build_features --dataset all --scale $(DATA_SCALE)
 
-split: ## Assign temporal train/val/test splits to both datasets
-	@if [ "$(FORCE)" = "0" ] && [ -f data/interim/.split_done ]; then \
-		echo "  ✓ Split column already present — skipping (use FORCE=1 to re-split)"; \
-	else \
-		$(PYTHON) -m src.splitting.temporal_split --dataset all && touch data/interim/.split_done; \
-	fi
+# ---------------------------------------------------------------------------
+# Retrieval + offline evaluation
+# ---------------------------------------------------------------------------
 
-# Feature store target
+bm25: ## Run BM25 retrieval on the labeled val split at DATA_SCALE
+	$(PYTHON) -m src.retrieval.run_bm25 --dataset all --scale $(DATA_SCALE)
 
-features: ## Build article + user feature stores (Parquet)
-	@if [ "$(FORCE)" = "0" ] \
-		&& [ -f data/processed/mind/article_features.parquet ] \
-		&& [ -f data/processed/mind/user_features.parquet ] \
-		&& [ -f data/processed/ebnerd/article_features.parquet ] \
-		&& [ -f data/processed/ebnerd/user_features.parquet ]; then \
-		echo "  ✓ Feature stores already present — skipping (use FORCE=1 to rebuild)"; \
-	else \
-		$(PYTHON) -m src.feature_store.build_features --dataset all; \
-	fi
+embed: ## Run semantic retrieval on the labeled val split at DATA_SCALE
+	$(PYTHON) -m src.retrieval.run_embeddings --dataset all --scale $(DATA_SCALE)
 
-# Full pipeline
+compare: ## Compare lexical vs semantic retrieval at DATA_SCALE
+	$(PYTHON) -m src.evaluation.compare_retrievers --scale $(DATA_SCALE)
 
-data: download parse split features ## Download, parse, split, and build features
+eval: ## Run full offline evaluation harness at DATA_SCALE
+	$(PYTHON) -m src.evaluation.run_eval --scale $(DATA_SCALE)
 
-# Downstream pipeline (not yet implemented)
+# ---------------------------------------------------------------------------
+# Codabench submission: unlabeled large test data only
+# ---------------------------------------------------------------------------
 
-bm25: ## Build inverted index and run BM25 retrieval
-	@if [ "$(FORCE)" = "0" ] && [ -f results/bm25_recall.csv ]; then \
-		echo "  ✓ BM25 results already present — skipping (use FORCE=1 to re-run)"; \
-	else \
-		$(PYTHON) -m src.retrieval.run_bm25 --dataset all; \
-	fi
+submit: submit-mind submit-ebnerd ## Generate both Codabench submissions from large test sets
 
-embed: ## Compute/load embeddings and run ANN retrieval
-	@if [ "$(FORCE)" = "0" ] && [ -f results/embed_recall.csv ]; then \
-		echo "  ✓ Embedding results already present — skipping (use FORCE=1 to re-run)"; \
-	else \
-		$(PYTHON) -m src.retrieval.run_embeddings --dataset all; \
-	fi
+submit-mind: ## Generate MIND prediction.txt + ZIP from MINDlarge_test
+	$(PYTHON) -m src.submission.make_submission --dataset mind --batch-size 50000 --history-cap 20
 
-compare: ## Compare lexical vs semantic retrieval
-	@if [ "$(FORCE)" = "0" ] && [ -f results/lexical_vs_semantic.csv ]; then \
-		echo "  ✓ Comparison results already present — skipping (use FORCE=1 to re-run)"; \
-	else \
-		$(PYTHON) -m src.evaluation.compare_retrievers; \
-	fi
+submit-ebnerd: ## Generate EB-NeRD prediction.txt + ZIP from ebnerd_testset
+	$(PYTHON) -m src.submission.make_submission --dataset ebnerd --batch-size 100000 --history-cap 20 --ebnerd-model w2v
 
-eval: ## Evaluate all retrieval runs
-	@if [ "$(FORCE)" = "0" ] && [ -f results/eval_summary.csv ]; then \
-		echo "  ✓ Evaluation results already present — skipping (use FORCE=1 to re-run)"; \
-	else \
-		$(PYTHON) -m src.evaluation.run_eval; \
-	fi
+validate-mind: ## Validate generated MIND prediction file and ZIP
+	$(PYTHON) -m src.submission.writers submissions/mind/prediction.txt
+	$(PYTHON) -m src.submission.package_submission submissions/mind/prediction.txt /tmp/mind_submission_check.zip
+	@unzip -l /tmp/mind_submission_check.zip
 
-submit: ## Generate Codabench submission files
-	@echo "📦 [submit] not yet implemented - will produce prediction files in Codabench format"
+validate-ebnerd: ## Validate generated EB-NeRD prediction file and ZIP
+	$(PYTHON) -m src.submission.writers submissions/ebnerd/prediction.txt
+	$(PYTHON) -m src.submission.package_submission submissions/ebnerd/prediction.txt /tmp/ebnerd_submission_check.zip
+	@unzip -l /tmp/ebnerd_submission_check.zip
 
-test: ## Run unit tests and anti-leakage tests
+# ---------------------------------------------------------------------------
+# Tests / cleanup
+# ---------------------------------------------------------------------------
+
+test: ## Run unit + anti-leakage tests
 	$(PYTHON) -m pytest tests/ src/evaluation/leakage_test.py -v
 
-clean: ## Remove processed data and caches
-	rm -rf data/interim/mind/ data/interim/ebnerd/
-	rm -f data/interim/.split_done
-	rm -rf data/processed/mind/ data/processed/ebnerd/
-	rm -rf __pycache__ src/__pycache__ src/**/__pycache__ tests/__pycache__
-	@echo "🧹 Cleaned interim, processed, and cache directories"
+clean: ## Remove generated processed/interim outputs and submission artifacts
+	rm -rf data/interim/mind/ data/interim/ebnerd/ data/interim/large/ \
+		data/processed/mind/ data/processed/ebnerd/ data/processed/large/ \
+		data/processed/submission/ submissions/ __pycache__ src/**/__pycache__ tests/__pycache__ \
+		results/large/
+	@echo "🧹 Cleaned generated pipeline outputs"

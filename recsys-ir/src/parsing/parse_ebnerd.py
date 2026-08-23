@@ -1,425 +1,307 @@
-"""Parse EB-NeRD Parquet files into the unified schema (articles, behaviors, users).
+"""Memory-safe EB-NeRD parser.
 
-Source files (per EDA_SUMMARY.md §10):
-  - articles.parquet — 21 columns (shared across splits):
-      article_id, title, subtitle, last_modified_time, premium, body,
-      published_time, image_ids, article_type, url, ner_clusters,
-      entity_groups, topics, category, subcategory, category_str,
-      total_inviews, total_pageviews, total_read_time, sentiment_score,
-      sentiment_label
-  - behaviors.parquet — 17 columns (per split):
-      impression_id, article_id, impression_time, read_time, scroll_percentage,
-      device_type, article_ids_inview (List[Int32]),
-      article_ids_clicked (List[Int32]), user_id, is_sso_user, gender,
-      postcode, age, is_subscriber, session_id, next_read_time,
-      next_scroll_percentage
-  - history.parquet — 5 columns (per split):
-      user_id, impression_time_fixed (List[Datetime]),
-      scroll_percentage_fixed (List[Float32]),
-      article_id_fixed (List[Int32]), read_time_fixed (List[Float32])
+For EB-NeRD-large, the old implementation duplicated each user's complete
+history JSON into every impression row and materialized all 25M+ behavior rows
+as Python dictionaries. On a 15-GB machine this is enough to exhaust RAM and
+can also create an unnecessarily huge intermediate file.
 
-Output: three Parquet files in data/interim/ebnerd/:
-  - articles.parquet
-  - behaviors.parquet
-  - users.parquet
+The large path therefore:
+  * streams behaviors in Arrow batches;
+  * stores candidates/labels per impression but does NOT duplicate history;
+  * stores the native per-user history once in ``users.parquet``;
+  * leaves timestamp-aware history retrieval to ``MemoryMappedHistoryStore``.
 
-Usage:
-    python -m src.parsing.parse_ebnerd [--split train] [--split validation]
+Small/demo behavior is kept compatible with the previous API.
 """
-
 from __future__ import annotations
 
 import json
 import logging
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import polars as pl
+import pyarrow.parquet as pq
 
 logger = logging.getLogger(__name__)
-
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-# EB-NeRD splits
 _SPLITS = ["train", "validation"]
 
+_OUTPUT_SCHEMA = {
+    "impression_id": pl.Utf8,
+    "dataset": pl.Utf8,
+    "user_id": pl.Utf8,
+    "timestamp": pl.Datetime("us"),
+    "clicked_history": pl.Utf8,
+    "candidates": pl.Utf8,
+    "labels": pl.Utf8,
+}
 
-# Entity parsing
+
+def _raw_dir_for_scale(scale: str) -> Path:
+    return _PROJECT_ROOT / "data" / "raw" / "ebnerd" / ("ebnerd_large" if scale == "large" else "")
+
 
 def _parse_ebnerd_entities(ner_clusters: Optional[list], entity_groups: Optional[list]) -> str:
-    """Parse EB-NeRD ner_clusters and entity_groups into unified entity format.
+    entities, seen = [], set()
+    for values, kind in ((ner_clusters, "NER"), (entity_groups, "GROUP")):
+        if not values:
+            continue
+        for label in values:
+            if not label or not isinstance(label, str):
+                continue
+            key = (label, kind)
+            if key in seen:
+                continue
+            seen.add(key)
+            entities.append({"label": label, "type": kind, "wikidata_id": None, "confidence": None})
+    return json.dumps(entities, separators=(",", ":"))
 
-    Unlike MIND, EB-NeRD entities do NOT carry WikidataId or confidence scores.
-    We populate {label, type} and leave wikidata_id/confidence as null.
-    """
-    entities = []
-    seen = set()
-
-    # ner_clusters is List[String] - each string is an entity label
-    if ner_clusters:
-        for label in ner_clusters:
-            if label and isinstance(label, str):
-                key = (label, "NER")
-                if key not in seen:
-                    seen.add(key)
-                    entities.append({
-                        "label": label,
-                        "type": "NER",
-                        "wikidata_id": None,
-                        "confidence": None,
-                    })
-
-    # entity_groups is List[String] - each string is an entity group/type label
-    if entity_groups:
-        for label in entity_groups:
-            if label and isinstance(label, str):
-                key = (label, "GROUP")
-                if key not in seen:
-                    seen.add(key)
-                    entities.append({
-                        "label": label,
-                        "type": "GROUP",
-                        "wikidata_id": None,
-                        "confidence": None,
-                    })
-
-    return json.dumps(entities)
-
-
-# Articles parsing
 
 def parse_ebnerd_articles(raw_dir: Path) -> pl.DataFrame:
-    """Parse EB-NeRD articles.parquet into the unified articles schema.
-
-    Key mappings:
-      - abstract ← subtitle (EB-NeRD has no 'abstract' column; 'subtitle' is the
-        closest functional equivalent: short teaser text alongside the title).
-      - body ← body column directly, body_source = "native" (natively available,
-        licensing-clean). ~8% missing per EDA §6.
-      - category ← category_str (the human-readable category name)
-      - subcategory ← subcategory list (List[Int16]) → joined as comma-separated string
-      - embedding_ref ← null (demo bundle has no embedding files — EDA §8)
-      - published_at ← published_time
-    """
     articles_path = raw_dir / "articles.parquet"
     if not articles_path.exists():
-        raise FileNotFoundError(f"EB-NeRD articles.parquet not found at {articles_path}")
-
-    logger.info("Parsing EB-NeRD articles from %s", articles_path)
+        raise FileNotFoundError(articles_path)
     df = pl.read_parquet(articles_path)
-    logger.info("EB-NeRD articles raw: %d rows, %d columns", len(df), len(df.columns))
-
-    rows = df.to_dicts()
-    unified_rows = []
-    for r in rows:
-        # subcategory: List[Int16] → join as comma-separated string
+    rows = []
+    for r in df.iter_rows(named=True):
         subcat = r.get("subcategory")
-        subcat_str = None
-        if subcat and isinstance(subcat, list) and len(subcat) > 0:
-            subcat_str = ",".join(str(s) for s in subcat)
-
-        entities_json = _parse_ebnerd_entities(
-            r.get("ner_clusters"),
-            r.get("entity_groups"),
-        )
-
-        # published_time: already a native Parquet Datetime - no string parsing needed
-        published_at = r.get("published_time")
-
-        unified_rows.append({
+        subcat_str = ",".join(str(x) for x in (subcat or [])) or None
+        rows.append({
             "article_id": str(r["article_id"]),
             "dataset": "ebnerd",
             "title": r.get("title") or "",
-            # abstract ← subtitle: the closest functional equivalent
-            # Map explicitly; do not leave abstract null just because the column
-            # name doesn't match.
             "abstract": r.get("subtitle") if r.get("subtitle") else None,
-            # body: natively available in EB-NeRD, licensing-clean
-            # Still OPTIONAL for the required pipeline (title+abstract scope),
-            # but body_source="native" distinguishes from MIND's null
             "body": r.get("body") if r.get("body") else None,
             "body_source": "native" if r.get("body") else None,
             "category": r.get("category_str") if r.get("category_str") else None,
             "subcategory": subcat_str,
-            "entities": entities_json,
-            "published_at": published_at,
-            # embedding_ref: null - demo bundle has no embeddings (EDA §8).
-            # Do not error or warn; this is expected at this stage.
+            "entities": _parse_ebnerd_entities(r.get("ner_clusters"), r.get("entity_groups")),
+            "published_at": r.get("published_time"),
             "embedding_ref": None,
         })
-
-    result = pl.DataFrame(unified_rows, schema={
-        "article_id": pl.Utf8,
-        "dataset": pl.Utf8,
-        "title": pl.Utf8,
-        "abstract": pl.Utf8,
-        "body": pl.Utf8,
-        "body_source": pl.Utf8,
-        "category": pl.Utf8,
-        "subcategory": pl.Utf8,
-        "entities": pl.Utf8,
-        "published_at": pl.Datetime("us"),
-        "embedding_ref": pl.Utf8,
+    out = pl.DataFrame(rows, schema={
+        "article_id": pl.Utf8, "dataset": pl.Utf8, "title": pl.Utf8,
+        "abstract": pl.Utf8, "body": pl.Utf8, "body_source": pl.Utf8,
+        "category": pl.Utf8, "subcategory": pl.Utf8, "entities": pl.Utf8,
+        "published_at": pl.Datetime("us"), "embedding_ref": pl.Utf8,
     })
+    logger.info("EB-NeRD articles parsed: %d rows", out.height)
+    return out
 
-    logger.info("EB-NeRD articles parsed: %d rows", len(result))
-    return result
 
-
-# Behaviors parsing
-
-def _build_history_lookup(history_path: Path) -> dict[int, list[dict]]:
-    """Build a user_id → clicked_history lookup from history.parquet.
-
-    history.parquet contains per-user FULL lifetime click history with parallel
-    list columns:
-      - article_id_fixed (List[Int32])
-      - impression_time_fixed (List[Datetime])
-
-    Unlike MIND, this is NOT pre-trimmed - it genuinely needs later
-    as-of-timestamp filtering (the real leakage-prevention step in the feature
-    store part).
-
-    Returns: {user_id: [{article_id: str, clicked_at: ISO datetime str}, ...]}
-    """
-    logger.info("Building history lookup from %s", history_path)
+def _history_lookup_small(history_path: Path) -> dict[int, list[dict]]:
     df = pl.read_parquet(history_path)
-    logger.info("  history.parquet: %d users", len(df))
-
-    lookup: dict[int, list[dict]] = {}
-    for row in df.to_dicts():
-        uid = row["user_id"]
-        article_ids = row.get("article_id_fixed") or []
-        timestamps = row.get("impression_time_fixed") or []
-
-        history_entries = []
-        for i, aid in enumerate(article_ids):
-            ts = timestamps[i] if i < len(timestamps) else None
-            clicked_at_str = ts.isoformat() if isinstance(ts, datetime) else None
-            history_entries.append({
-                "article_id": str(aid),
-                "clicked_at": clicked_at_str,
-            })
-
-        lookup[uid] = history_entries
-
+    lookup = {}
+    for row in df.iter_rows(named=True):
+        entries = []
+        for i, aid in enumerate(row.get("article_id_fixed") or []):
+            ts = (row.get("impression_time_fixed") or [None])[i] if i < len(row.get("impression_time_fixed") or []) else None
+            entries.append({"article_id": str(aid), "clicked_at": ts.isoformat() if isinstance(ts, datetime) else None})
+        lookup[int(row["user_id"])] = entries
     return lookup
 
 
-def parse_ebnerd_behaviors(
-    raw_dir: Path, splits: list[str] | None = None
-) -> tuple[pl.DataFrame, dict[str, int]]:
-    """Parse EB-NeRD behaviors.parquet + history.parquet into unified schema.
-
-    clicked_history:
-      NOT inline in behaviors.parquet (unlike MIND). Built by joining
-      history.parquet onto behaviors.parquet on user_id - each history entry
-      keeps its real click timestamp ({article_id, clicked_at: impression_time_fixed[i]}).
-
-      Unlike MIND, this is the user's FULL lifetime history, not pre-trimmed.
-
-    candidates / labels:
-      - candidates = article_ids_inview (List[Int32])
-      - labels = 1 if article_id in article_ids_clicked else 0, for each candidate
-
-    Returns:
-      (behaviors_df, join_stats) where join_stats maps split name →
-      original row count, for validation that the join didn't drop rows.
-    """
-    if splits is None:
-        splits = list(_SPLITS)
-
-    all_frames = []
-    join_stats: dict[str, int] = {}
-
-    for split in splits:
-        split_dir = raw_dir / split
-        beh_path = split_dir / "behaviors.parquet"
-        hist_path = split_dir / "history.parquet"
-
-        if not beh_path.exists():
-            raise FileNotFoundError(f"EB-NeRD behaviors.parquet not found at {beh_path}")
-        if not hist_path.exists():
-            raise FileNotFoundError(f"EB-NeRD history.parquet not found at {hist_path}")
-
-        logger.info("Parsing EB-NeRD behaviors from %s", beh_path)
-        beh_df = pl.read_parquet(beh_path)
-        original_count = len(beh_df)
-        join_stats[split] = original_count
-        logger.info("  behaviors.parquet (%s): %d rows", split, original_count)
-
-        # Build history lookup for this split
-        history_lookup = _build_history_lookup(hist_path)
-
-        rows = beh_df.to_dicts()
-        for r in rows:
-            uid = r["user_id"]
-            # impression_time: already a native Parquet Datetime - confirm dtype
-            timestamp = r["impression_time"]
-            if not isinstance(timestamp, datetime):
-                logger.warning("EB-NeRD impression_time is not datetime: %s (type %s)",
-                               timestamp, type(timestamp))
-
-            # History: join from history.parquet on user_id
-            clicked_history = history_lookup.get(uid, [])
-
-            # Candidates: article_ids_inview (List[Int32])
-            inview = r.get("article_ids_inview") or []
-            candidates = [str(aid) for aid in inview]
-
-            # Labels: 1 if in clicked set, else 0
-            clicked_set = set(r.get("article_ids_clicked") or [])
-            labels = [1 if aid in clicked_set else 0 for aid in inview]
-
-            all_frames.append({
-                "impression_id": str(r["impression_id"]),
-                "dataset": "ebnerd",
-                "user_id": str(uid),
-                "timestamp": timestamp,
-                "clicked_history": json.dumps(clicked_history),
-                "candidates": json.dumps(candidates),
-                "labels": json.dumps(labels),
-            })
-
-    result = pl.DataFrame(all_frames, schema={
-        "impression_id": pl.Utf8,
-        "dataset": pl.Utf8,
-        "user_id": pl.Utf8,
-        "timestamp": pl.Datetime("us"),
-        "clicked_history": pl.Utf8,
-        "candidates": pl.Utf8,
-        "labels": pl.Utf8,
-    })
-
-    logger.info("EB-NeRD behaviors parsed: %d rows", len(result))
-    return result, join_stats
-
-
-# User derivation
-
-def derive_ebnerd_users(behaviors: pl.DataFrame) -> pl.DataFrame:
-    """Derive per-user summary from parsed behaviors.
-
-    Aggregates across all impressions to build:
-      - history_article_ids: union of all history entries across impressions
-      - history_len: count of unique history article IDs
-      - last_active_at: max timestamp across impressions
-    """
-    rows = behaviors.to_dicts()
-
-    user_data: dict[str, dict] = {}
-    for r in rows:
-        uid = r["user_id"]
-        ts = r["timestamp"]
-        history = json.loads(r["clicked_history"])
-        article_ids = [h["article_id"] for h in history]
-
-        if uid not in user_data:
-            user_data[uid] = {
-                "user_id": uid,
-                "dataset": "ebnerd",
-                "article_ids": set(),
-                "last_active_at": ts,
-            }
-
-        user_data[uid]["article_ids"].update(article_ids)
-        if ts and (user_data[uid]["last_active_at"] is None or ts > user_data[uid]["last_active_at"]):
-            user_data[uid]["last_active_at"] = ts
-
-    unified_rows = []
-    for ud in user_data.values():
-        aids = sorted(ud["article_ids"])
-        unified_rows.append({
-            "user_id": ud["user_id"],
+def _parse_behavior_batch(batch, include_history: bool, history_lookup: dict[int, list[dict]] | None = None) -> pl.DataFrame:
+    rows = []
+    cols = {name: batch.column(i).to_pylist() for i, name in enumerate(batch.schema.names)}
+    n = batch.num_rows
+    for i in range(n):
+        uid = cols["user_id"][i]
+        inview = cols["article_ids_inview"][i] or []
+        clicked = set(cols["article_ids_clicked"][i] or [])
+        candidates = [str(aid) for aid in inview]
+        labels = [1 if aid in clicked else 0 for aid in inview]
+        history = history_lookup.get(int(uid), []) if include_history and history_lookup is not None else []
+        rows.append({
+            "impression_id": str(cols["impression_id"][i]),
             "dataset": "ebnerd",
-            "history_article_ids": json.dumps(aids),
-            "history_len": len(aids),
-            "last_active_at": ud["last_active_at"],
+            "user_id": str(uid),
+            "timestamp": cols["impression_time"][i],
+            "clicked_history": json.dumps(history, separators=(",", ":")),
+            "candidates": json.dumps(candidates, separators=(",", ":")),
+            "labels": json.dumps(labels, separators=(",", ":")),
         })
-
-    result = pl.DataFrame(unified_rows, schema={
-        "user_id": pl.Utf8,
-        "dataset": pl.Utf8,
-        "history_article_ids": pl.Utf8,
-        "history_len": pl.Int64,
-        "last_active_at": pl.Datetime("us"),
-    })
-
-    logger.info("EB-NeRD users derived: %d users", len(result))
-    return result
+    return pl.DataFrame(rows, schema=_OUTPUT_SCHEMA)
 
 
-# Write interim output
+def _write_batches(batches, output_path: Path) -> int:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    writer = None
+    total = 0
+    try:
+        for df in batches:
+            if df.height == 0:
+                continue
+            table = df.to_arrow()
+            if writer is None:
+                writer = pq.ParquetWriter(output_path, table.schema, compression="zstd")
+            writer.write_table(table)
+            total += df.height
+            if total % 500_000 < df.height:
+                logger.info(f"  wrote {total:,} EB-NeRD behavior rows")
+    finally:
+        if writer is not None:
+            writer.close()
+    return total
 
-def write_interim(articles: pl.DataFrame, behaviors: pl.DataFrame,
-                  users: pl.DataFrame, interim_dir: Path) -> None:
-    """Write parsed DataFrames to Parquet in the interim directory."""
-    interim_dir.mkdir(parents=True, exist_ok=True)
 
-    articles_path = interim_dir / "articles.parquet"
-    behaviors_path = interim_dir / "behaviors.parquet"
-    users_path = interim_dir / "users.parquet"
+def _stream_large_behaviors(raw_dir: Path, splits: list[str], output_path: Path, batch_size: int = 50_000) -> tuple[int, dict[str, int]]:
+    join_stats = {}
 
-    articles.write_parquet(articles_path)
-    behaviors.write_parquet(behaviors_path)
-    users.write_parquet(users_path)
+    def batches():
+        for split in splits:
+            path = raw_dir / split / "behaviors.parquet"
+            if not path.exists():
+                raise FileNotFoundError(path)
+            parquet = pq.ParquetFile(path)
+            join_stats[split] = parquet.metadata.num_rows
+            logger.info(
+                f"Streaming EB-NeRD {split} behaviors: "
+                f"{parquet.metadata.num_rows:,} rows (batch={batch_size})"
+            )
+            columns = ["impression_id", "impression_time", "article_ids_inview", "article_ids_clicked", "user_id"]
+            for batch in parquet.iter_batches(batch_size=batch_size, columns=columns):
+                # Large mode deliberately leaves clicked_history empty. The native
+                # history file is indexed once by feature_store/history_store.py.
+                yield _parse_behavior_batch(batch, include_history=False)
 
-    logger.info("EB-NeRD interim written to %s", interim_dir)
-    logger.info("  articles:  %d rows → %s", len(articles), articles_path)
-    logger.info("  behaviors: %d rows → %s", len(behaviors), behaviors_path)
-    logger.info("  users:     %d rows → %s", len(users), users_path)
+    return _write_batches(batches(), output_path), join_stats
 
 
-# Main
+def parse_ebnerd_behaviors(raw_dir: Path, splits: list[str] | None = None) -> tuple[pl.DataFrame, dict[str, int]]:
+    splits = splits or list(_SPLITS)
+    all_frames = []
+    stats = {}
+    for split in splits:
+        beh_path = raw_dir / split / "behaviors.parquet"
+        hist_path = raw_dir / split / "history.parquet"
+        history_lookup = _history_lookup_small(hist_path)
+        beh = pl.read_parquet(beh_path)
+        stats[split] = beh.height
+        # Convert the entire small/demo split only; this function is not used for EB-large.
+        cols = {name: beh[name].to_list() for name in ["impression_id", "impression_time", "article_ids_inview", "article_ids_clicked", "user_id"]}
+        rows = []
+        for i in range(beh.height):
+            uid = cols["user_id"][i]
+            inview = cols["article_ids_inview"][i] or []
+            clicked = set(cols["article_ids_clicked"][i] or [])
+            rows.append({
+                "impression_id": str(cols["impression_id"][i]),
+                "dataset": "ebnerd", "user_id": str(uid), "timestamp": cols["impression_time"][i],
+                "clicked_history": json.dumps(history_lookup.get(int(uid), []), separators=(",", ":")),
+                "candidates": json.dumps([str(x) for x in inview], separators=(",", ":")),
+                "labels": json.dumps([1 if x in clicked else 0 for x in inview], separators=(",", ":")),
+            })
+        all_frames.append(pl.DataFrame(rows, schema=_OUTPUT_SCHEMA))
+    return pl.concat(all_frames), stats
 
-def main(splits: list[str] | None = None) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, dict[str, int]]:
-    """Parse EB-NeRD and write to interim. Returns (articles, behaviors, users, join_stats)."""
-    raw_dir = _PROJECT_ROOT / "data" / "raw" / "ebnerd"
-    interim_dir = _PROJECT_ROOT / "data" / "interim" / "ebnerd"
+
+def _write_large_user_summary(history_path: Path, users_path: Path) -> None:
+    """Write one row per user from native history, streamed in Arrow batches."""
+    parquet = pq.ParquetFile(history_path)
+    writer = None
+    total = 0
+    try:
+        for batch in parquet.iter_batches(batch_size=20_000, columns=["user_id", "article_id_fixed", "impression_time_fixed"]):
+            users, datasets, histories, lengths, lasts = [], [], [], [], []
+            user_col = batch.column(0).to_pylist()
+            article_col = batch.column(1).to_pylist()
+            time_col = batch.column(2).to_pylist()
+            for uid, aids, times in zip(user_col, article_col, time_col):
+                aids = aids or []
+                times = times or []
+                entries = []
+                last = None
+                for j, aid in enumerate(aids):
+                    ts = times[j] if j < len(times) else None
+                    ts_str = ts.isoformat() if hasattr(ts, "isoformat") else None
+                    entries.append({"article_id": str(aid), "clicked_at": ts_str})
+                    if ts is not None and (last is None or ts > last):
+                        last = ts
+                users.append(str(uid)); datasets.append("ebnerd")
+                histories.append(json.dumps(entries, separators=(",", ":")))
+                lengths.append(len(entries)); lasts.append(last)
+            df = pl.DataFrame({
+                "user_id": users, "dataset": datasets, "all_history": histories,
+                "history_len": lengths, "last_active_at": lasts,
+            })
+            table = df.to_arrow()
+            if writer is None:
+                writer = pq.ParquetWriter(users_path, table.schema, compression="zstd")
+            writer.write_table(table)
+            total += df.height
+    finally:
+        if writer is not None:
+            writer.close()
+    logger.info(f"EB-NeRD large user summary written: {total:,} users")
+
+
+def _copy_history_sources(raw_dir: Path, out_dir: Path) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for split in _SPLITS:
+        src = raw_dir / split / "history.parquet"
+        if src.exists():
+            shutil.copy2(src, out_dir / f"history_{split}.parquet")
+
+
+def main(splits: list[str] | None = None, scale: str = "small"):
+    from src.common.paths import interim_dir
+    raw_dir = _raw_dir_for_scale(scale)
+    out_dir = interim_dir("ebnerd", scale)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if scale == "large":
+        (out_dir / ".parse_complete").unlink(missing_ok=True)
+    splits = splits or list(_SPLITS)
 
     articles = parse_ebnerd_articles(raw_dir)
-    behaviors, join_stats = parse_ebnerd_behaviors(raw_dir, splits=splits)
-    users = derive_ebnerd_users(behaviors)
-    write_interim(articles, behaviors, users, interim_dir)
+    articles.write_parquet(out_dir / "articles.parquet", compression="zstd")
 
-    return articles, behaviors, users, join_stats
+    if scale == "large":
+        count, stats = _stream_large_behaviors(raw_dir, splits, out_dir / "behaviors.parquet", batch_size=50_000)
+        logger.info(f"EB-NeRD-large behaviors written: {count:,} rows")
+        _write_large_user_summary(raw_dir / "train" / "history.parquet", out_dir / "users.parquet")
+        _copy_history_sources(raw_dir, out_dir)
+        (out_dir / ".parse_complete").write_text("ok\n")
+        return articles, None, None, stats
+
+    behaviors, stats = parse_ebnerd_behaviors(raw_dir, splits=splits)
+    # Backward-compatible user derivation for small/demo.
+    users = []
+    for r in behaviors.iter_rows(named=True):
+        users.append(r)
+    user_map = {}
+    for r in users:
+        state = user_map.setdefault(r["user_id"], {"user_id": r["user_id"], "dataset": "ebnerd", "history": {}, "last": r["timestamp"]})
+        for e in json.loads(r["clicked_history"]):
+            state["history"].setdefault(e["article_id"], e)
+        state["last"] = max(state["last"], r["timestamp"])
+    user_rows = [
+        {
+            "user_id": v["user_id"], "dataset": "ebnerd",
+            "all_history": json.dumps(list(v["history"].values())),
+            "history_len": len(v["history"]), "last_active_at": v["last"],
+        }
+        for v in user_map.values()
+    ]
+    pl.DataFrame(user_rows, schema={
+        "user_id": pl.Utf8, "dataset": pl.Utf8, "all_history": pl.Utf8,
+        "history_len": pl.Int64, "last_active_at": pl.Datetime("us"),
+    }).write_parquet(out_dir / "users.parquet", compression="zstd")
+    behaviors.write_parquet(out_dir / "behaviors.parquet", compression="zstd")
+    return articles, behaviors, users, stats
 
 
 if __name__ == "__main__":
     import argparse
-    import sys
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
-    )
-
-    parser = argparse.ArgumentParser(description="Parse EB-NeRD Parquet → unified schema Parquet")
-    parser.add_argument(
-        "--split", action="append", choices=["train", "validation"],
-        help="Splits to parse (default: all). Can be specified multiple times.",
-    )
+    parser = argparse.ArgumentParser(description="Parse EB-NeRD into unified Parquet")
+    parser.add_argument("--split", action="append", choices=["train", "validation"])
+    parser.add_argument("--scale", choices=["small", "large"], default="small")
     args = parser.parse_args()
-
-    splits = args.split if args.split else None
-    articles, behaviors, users, join_stats = main(splits=splits)
-
-    print(f"\n{'='*60}")
-    print(f"EB-NeRD parsing complete.")
-    print(f"  Articles:  {len(articles):>8,d} rows")
-    print(f"  Behaviors: {len(behaviors):>8,d} rows")
-    print(f"  Users:     {len(users):>8,d} rows")
-    print(f"\nHistory join stats (should match original row counts):")
-    for split_name, orig_count in join_stats.items():
-        print(f"  {split_name}: original = {orig_count:,d}")
-    joined_total = len(behaviors)
-    original_total = sum(join_stats.values())
-    print(f"  TOTAL: original = {original_total:,d}, joined = {joined_total:,d}")
-    if joined_total == original_total:
-        print(f"  ✓ Row count preserved — join is correct")
-    else:
-        print(f"  ✗ ROW COUNT MISMATCH — investigate!")
-    print(f"{'='*60}")
-
-    sys.exit(0)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s — %(message)s")
+    articles, behaviors, users, stats = main(args.split, args.scale)
+    print(f"EB-NeRD parsing complete: articles={len(articles):,}; behaviors={'streamed' if behaviors is None else len(behaviors)}")
+    for split, n in stats.items():
+        print(f"  {split}: {n:,} input rows")

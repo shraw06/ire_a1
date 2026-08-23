@@ -1,20 +1,9 @@
-"""Embedding-based retrieval pipeline runner — load/compute embeddings, build index,
-score candidates, compute recall@K.
+"""Memory-safe embedding retrieval on labeled validation data.
 
-Usage:
-    python -m src.retrieval.run_embeddings --dataset mind
-    python -m src.retrieval.run_embeddings --dataset ebnerd
-    python -m src.retrieval.run_embeddings --dataset all
-
-For each dataset, runs embedding retrieval on the val split using the
-same protocol as BM25 (candidate-restricted, recall@{50,100,200}).
-
-EB-NeRD: runs both BERT (primary) and Word2Vec (baseline).
-MIND: runs all-MiniLM-L6-v2.
-
-Results are written to:
-  - ``results/embed_recall.csv``
-  - ``data/processed/embed_scores_{dataset}.parquet``
+Small scale keeps the original in-memory implementation.
+Large scale uses the already-built large user-feature stores and streams the
+validation Parquet file in bounded batches. No full validation table or list of
+all scored impressions is kept in RAM.
 """
 
 from __future__ import annotations
@@ -27,26 +16,24 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import numpy as np
 import polars as pl
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from src.evaluation.ranking_metrics import recall_at_k
 from src.feature_store.article_store import ArticleFeatureStore
-from src.feature_store.user_store import UserFeatureStore
 from src.retrieval.ann import ArticleIndex
 from src.retrieval.embeddings import load_embeddings
+from src.retrieval.user_representation import build_mean_user_vector, build_mean_user_vectors
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-# Recall@K cutoffs — same as BM25
 RECALL_KS = [50, 100, 200]
-
-# Maximum number of history articles for user representation
 DEFAULT_HISTORY_CAP = 20
+LARGE_BATCH_SIZE = 2000
 
 
 def _build_user_vector(
@@ -54,51 +41,281 @@ def _build_user_vector(
     index: ArticleIndex,
     history_cap: int = DEFAULT_HISTORY_CAP,
 ) -> np.ndarray:
-    """Mean-pool embeddings of the user's recent history articles.
+    return build_mean_user_vector(user_history, index, history_cap=history_cap)
 
-    Mean-pooling is chosen over recency-weighted pooling or attention-based
-    encoders purely for compute/time budget — it's a single matrix operation
-    and gives an interpretable baseline.
 
-    Parameters
-    ----------
-    user_history : list[dict]
-        From ``UserFeatureStore.get_user_history()`` — list of
-        ``{article_id, clicked_at}`` dicts, oldest first.
-    index : ArticleIndex
-        The article embedding index.
-    history_cap : int
-        Maximum number of recent history articles to include.
+def _parse_candidates_labels(row: dict[str, Any]) -> tuple[list[str], list[int]]:
+    candidates_raw = row["candidates"]
+    labels_raw = row["labels"]
+    candidates = json.loads(candidates_raw) if isinstance(candidates_raw, str) else candidates_raw
+    labels = json.loads(labels_raw) if isinstance(labels_raw, str) else labels_raw
+    return [str(x) for x in candidates], [int(x) for x in labels]
 
-    Returns
-    -------
-    np.ndarray
-        L2-normalized user vector, shape ``(dim,)``.
-        Zero vector if no history articles have embeddings.
-    """
-    # Take the most recent N (history is oldest-first → take from the end)
-    recent = user_history[-history_cap:]
-    history_ids = [entry["article_id"] for entry in recent]
 
-    if not history_ids:
-        return np.zeros(index.dim, dtype=np.float32)
+def _parse_mind_history(row: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = row.get("clicked_history")
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return json.loads(raw) if raw else []
+    return list(raw)
 
-    # Get embeddings for history articles that exist in the index
-    embeds, found_ids = index.get_embeddings_batch(history_ids)
 
-    if len(found_ids) == 0:
-        # No history articles have embeddings - return zero vector
-        return np.zeros(index.dim, dtype=np.float32)
+def _normalize_timestamp(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None) if value.tzinfo else value
+    return datetime.fromisoformat(str(value))
 
-    # Mean-pool
-    user_vec = embeds.mean(axis=0)
 
-    # L2-normalize
-    norm = np.linalg.norm(user_vec)
-    if norm > 0:
-        user_vec = user_vec / norm
+def _iter_validation_batches(
+    behaviors_path: Path,
+    batch_size: int,
+) -> Iterator[list[dict[str, Any]]]:
+    parquet = pq.ParquetFile(behaviors_path)
+    columns = [
+        "impression_id",
+        "user_id",
+        "timestamp",
+        "clicked_history",
+        "candidates",
+        "labels",
+        "split",
+    ]
 
-    return user_vec.astype(np.float32)
+    buffer: list[dict[str, Any]] = []
+    for record_batch in parquet.iter_batches(batch_size=batch_size, columns=columns):
+        rows = pa.Table.from_batches([record_batch]).to_pylist()
+        for row in rows:
+            if row["split"] != "val":
+                continue
+            buffer.append(row)
+            if len(buffer) >= batch_size:
+                yield buffer
+                buffer = []
+    if buffer:
+        yield buffer
+
+
+def _score_rows(
+    rows: list[dict[str, Any]],
+    dataset: str,
+    index: ArticleIndex,
+    user_store,
+    history_cap: int,
+    model: str,
+    score_writer: pq.ParquetWriter,
+    spot_check_remaining: int,
+) -> tuple[dict[int, float], int, int]:
+    histories: list[list[dict[str, Any]]] = []
+    parsed: list[tuple[dict[str, Any], list[str], list[int], set[str]]] = []
+
+    for row in rows:
+        candidates, labels = _parse_candidates_labels(row)
+        ground_truth = {cid for cid, label in zip(candidates, labels) if label == 1}
+        if dataset == "mind":
+            features = user_store.from_behavior_row(row)
+        else:
+            features = user_store.get_features(
+                str(row["user_id"]),
+                _normalize_timestamp(row["timestamp"]),
+            )
+        history = features["history"]
+        histories.append(history)
+        parsed.append((row, candidates, labels, ground_truth))
+
+    user_vectors = build_mean_user_vectors(
+        histories,
+        index,
+        history_cap=history_cap,
+    )
+
+    recall_sums = {k: 0.0 for k in RECALL_KS}
+    output_rows: list[dict[str, Any]] = []
+    spot_checks = 0
+
+    for i, (row, candidates, labels, ground_truth) in enumerate(parsed):
+        results = index.search_restricted(
+            user_vectors[i],
+            candidates,
+            k=max(RECALL_KS),
+        )
+        scored_ids = {rid for rid, _ in results}
+        if len(results) < len(candidates):
+            results.extend((cid, 0.0) for cid in candidates if cid not in scored_ids)
+        ranked_ids = [rid for rid, _ in results]
+
+        for k in RECALL_KS:
+            recall_sums[k] += recall_at_k(ranked_ids, ground_truth, k)
+
+        output_rows.append({
+            "impression_id": str(row["impression_id"]),
+            "user_id": str(row["user_id"]),
+            "timestamp": _normalize_timestamp(row["timestamp"]).isoformat(),
+            "candidates": json.dumps(candidates),
+            "labels": json.dumps(labels),
+            "ranked_ids": json.dumps(ranked_ids),
+            "scores": json.dumps([float(score) for _, score in results]),
+            "ground_truth": json.dumps(sorted(ground_truth)),
+        })
+
+        if spot_checks < spot_check_remaining and ground_truth:
+            print(f"\n  Spot-check [{dataset}/{model}] user={row['user_id']} imp={row['impression_id']}")
+            print(f"     History len: {len(histories[i])}, User vector norm: {np.linalg.norm(user_vectors[i]):.4f}")
+            print(f"     Ground truth: {ground_truth}")
+            print(f"     Candidates: {len(candidates)}")
+            print("     Top-5 embedding hits:")
+            for rank, (rid, score) in enumerate(results[:5], 1):
+                marker = " ✓" if rid in ground_truth else ""
+                print(f"       {rank}. {rid} (sim={score:.4f}){marker}")
+            spot_checks += 1
+
+    score_writer.write_table(pa.Table.from_pylist(output_rows))
+    return recall_sums, len(parsed), spot_checks
+
+
+def _run_large(
+    dataset: str,
+    model: str,
+    history_cap: int = DEFAULT_HISTORY_CAP,
+    spot_check_users: int = 5,
+) -> list[dict[str, Any]]:
+    from src.common.paths import interim_dir, processed_dir, results_dir
+    from src.feature_store.large_user_store import LargeUserFeatureStore
+
+    t0 = time.time()
+    embeddings, id_to_row, coverage = load_embeddings(dataset, model, scale="large")
+    article_ids_ordered = [""] * len(id_to_row)
+    for aid, idx in id_to_row.items():
+        article_ids_ordered[idx] = aid
+
+    # Candidate-restricted ranking does not need a full FAISS catalog index.
+    index = ArticleIndex(embeddings, article_ids_ordered, build_full_index=False)
+    index.self_similarity_check(sample_size=min(5, index.n_articles))
+
+    processed = processed_dir(dataset, "large")
+    user_store = LargeUserFeatureStore(dataset, processed)
+    behaviors_path = interim_dir(dataset, "large") / "behaviors.parquet"
+    scores_path = processed / f"embed_scores_{dataset}_{model}.parquet"
+    scores_path.parent.mkdir(parents=True, exist_ok=True)
+
+    schema = pa.schema([
+        ("impression_id", pa.string()),
+        ("user_id", pa.string()),
+        ("timestamp", pa.string()),
+        ("candidates", pa.string()),
+        ("labels", pa.string()),
+        ("ranked_ids", pa.string()),
+        ("scores", pa.string()),
+        ("ground_truth", pa.string()),
+    ])
+
+    recall_totals = {k: 0.0 for k in RECALL_KS}
+    count = 0
+    spot_remaining = spot_check_users
+
+    logger.info("Streaming large validation data from %s", behaviors_path)
+    if coverage is not None:
+        logger.info("  Embedding coverage: %.2f%%", coverage * 100)
+
+    with pq.ParquetWriter(scores_path, schema, compression="zstd") as writer:
+        for batch_idx, rows in enumerate(_iter_validation_batches(behaviors_path, LARGE_BATCH_SIZE), 1):
+            batch_sums, batch_count, used_spots = _score_rows(
+                rows,
+                dataset,
+                index,
+                user_store,
+                history_cap,
+                model,
+                writer,
+                spot_remaining,
+            )
+            for k in RECALL_KS:
+                recall_totals[k] += batch_sums[k]
+            count += batch_count
+            spot_remaining -= used_spots
+
+            if count % 20_000 < batch_count:
+                elapsed_min = (time.time() - t0) / 60.0
+                logger.info("  Processed %d validation impressions (%.1f min)", count, elapsed_min)
+
+    elapsed = time.time() - t0
+    results = []
+    for k in RECALL_KS:
+        value = recall_totals[k] / count if count else 0.0
+        results.append({
+            "dataset": dataset,
+            "model": model,
+            "retriever": "embedding",
+            "K": k,
+            "recall_at_K": round(value, 6),
+            "num_impressions": count,
+            "wall_clock_s": round(elapsed, 1),
+        })
+        logger.info("  recall@%d = %.4f (avg over %d impressions)", k, value, count)
+
+    logger.info("  Saved scored candidates: %s (%.1f MB)", scores_path, scores_path.stat().st_size / 1024**2)
+    logger.info("  Total wall-clock: %.1fs", elapsed)
+    return results
+
+
+def _run_small(
+    dataset: str,
+    model: str,
+    history_cap: int,
+) -> list[dict[str, Any]]:
+    from src.common.paths import interim_dir, processed_root
+    from src.feature_store.user_store import UserFeatureStore
+
+    t0 = time.time()
+    embeddings, id_to_row, _ = load_embeddings(dataset, model, scale="small")
+    article_ids_ordered = [""] * len(id_to_row)
+    for aid, idx in id_to_row.items():
+        article_ids_ordered[idx] = aid
+    index = ArticleIndex(embeddings, article_ids_ordered)
+
+    behaviors_path = interim_dir(dataset, "small") / "behaviors.parquet"
+    val_df = pl.read_parquet(behaviors_path).filter(pl.col("split") == "val")
+    user_store = UserFeatureStore(dataset, scale="small")
+
+    recalls = {k: [] for k in RECALL_KS}
+    scored: list[dict[str, Any]] = []
+    for row in val_df.iter_rows(named=True):
+        candidates, labels = _parse_candidates_labels(row)
+        truth = {cid for cid, label in zip(candidates, labels) if label == 1}
+        history = user_store.get_user_history(row["user_id"], row["timestamp"], dataset)
+        user_vec = _build_user_vector(history, index, history_cap)
+        results = index.search_restricted(user_vec, candidates, k=max(RECALL_KS))
+        if len(results) < len(candidates):
+            seen = {x[0] for x in results}
+            results.extend((cid, 0.0) for cid in candidates if cid not in seen)
+        ranked = [x[0] for x in results]
+        for k in RECALL_KS:
+            recalls[k].append(recall_at_k(ranked, truth, k))
+        scored.append({
+            "impression_id": str(row["impression_id"]),
+            "user_id": str(row["user_id"]),
+            "timestamp": str(row["timestamp"]),
+            "candidates": json.dumps(candidates),
+            "labels": json.dumps(labels),
+            "ranked_ids": json.dumps(ranked),
+            "scores": json.dumps([float(s) for _, s in results]),
+            "ground_truth": json.dumps(sorted(truth)),
+        })
+
+    elapsed = time.time() - t0
+    out_path = processed_root("small") / f"embed_scores_{dataset}_{model}.parquet"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(scored).write_parquet(out_path)
+
+    return [{
+        "dataset": dataset,
+        "model": model,
+        "retriever": "embedding",
+        "K": k,
+        "recall_at_K": round(sum(recalls[k]) / len(recalls[k]), 6) if recalls[k] else 0.0,
+        "num_impressions": len(recalls[k]),
+        "wall_clock_s": round(elapsed, 1),
+    } for k in RECALL_KS]
 
 
 def run_embedding_retrieval(
@@ -106,158 +323,11 @@ def run_embedding_retrieval(
     model: str = "default",
     history_cap: int = DEFAULT_HISTORY_CAP,
     spot_check_users: int = 5,
+    scale: str = "small",
 ) -> list[dict[str, Any]]:
-    """Run embedding retrieval on the val split of a dataset.
-
-    Returns a list of result dicts for results/embed_recall.csv.
-    """
-    model_label = f"{dataset}_{model}" if model != "default" else dataset
-    logger.info("Running embedding retrieval on %s (model=%s)", dataset, model)
-    t0 = time.time()
-
-    # 1. Load embeddings
-    embeddings, id_to_row, coverage = load_embeddings(dataset, model)
-    logger.info(
-        "  Loaded embeddings: %d articles, dim=%d",
-        embeddings.shape[0], embeddings.shape[1],
-    )
-    if coverage is not None:
-        logger.info("  EB-NeRD embedding coverage: %.2f%%", coverage * 100)
-
-    # 2. Build ANN index
-    # Convert id_to_row to ordered article_ids list
-    article_ids_ordered = [""] * len(id_to_row)
-    for aid, idx in id_to_row.items():
-        article_ids_ordered[idx] = aid
-
-    index = ArticleIndex(embeddings, article_ids_ordered)
-    logger.info("  Built index: %s", index)
-
-    # 3. Self-similarity sanity check 
-    index.self_similarity_check(sample_size=5)
-
-    # 4. Dimensionality validation
-    dim = embeddings.shape[1]
-    assert all(
-        embeddings[i].shape[0] == dim for i in range(len(embeddings))
-    ), "Embedding dimensionality inconsistency detected!"
-    logger.info("  Dimensionality validation passed: all %d rows have dim=%d", len(embeddings), dim)
-
-    # 5. Load val-split impressions 
-    behaviors_path = _PROJECT_ROOT / "data" / "interim" / dataset / "behaviors.parquet"
-    behaviors_df = pl.read_parquet(behaviors_path)
-    val_df = behaviors_df.filter(pl.col("split") == "val")
-    logger.info("  Val impressions: %d", len(val_df))
-
-    # ── 6. Load user store ────────────────────────────────────────
-    user_store = UserFeatureStore(dataset)
-
-    # ── 7. Score each impression ──────────────────────────────────
-    all_scored: list[dict[str, Any]] = []
-    per_impression_recalls: dict[int, list[float]] = {k: [] for k in RECALL_KS}
-    spot_check_done = 0
-
-    for i, row in enumerate(val_df.iter_rows(named=True)):
-        imp_id = row["impression_id"]
-        user_id = row["user_id"]
-        timestamp = row["timestamp"]
-        candidates = json.loads(row["candidates"])
-        labels = json.loads(row["labels"])
-
-        # Ground truth: clicked articles
-        ground_truth = set()
-        for cid, label in zip(candidates, labels):
-            if label == 1:
-                ground_truth.add(cid)
-
-        # Get user history (leakage-safe) — SAME accessor as BM25
-        history = user_store.get_user_history(user_id, timestamp, dataset)
-
-        # Build user vector from history embeddings
-        user_vec = _build_user_vector(history, index, history_cap)
-
-        # Score candidates via embedding similarity (restricted to impression's candidates)
-        max_k = max(RECALL_KS)
-        results = index.search_restricted(user_vec, candidates, k=max_k)
-        ranked_ids = [r[0] for r in results]
-
-        # Ensure all candidates appear in results
-        scored_ids = {r[0] for r in results}
-        for cid in candidates:
-            if cid not in scored_ids:
-                results.append((cid, 0.0))
-                ranked_ids.append(cid)
-
-        # Compute recall@K
-        for k_val in RECALL_KS:
-            r = recall_at_k(ranked_ids, ground_truth, k_val)
-            per_impression_recalls[k_val].append(r)
-
-        # Store scored candidates
-        all_scored.append({
-            "impression_id": imp_id,
-            "user_id": user_id,
-            "timestamp": str(timestamp),
-            "candidates": json.dumps(candidates),
-            "labels": json.dumps(labels),
-            "ranked_ids": json.dumps(ranked_ids),
-            "scores": json.dumps([r[1] for r in results]),
-            "ground_truth": json.dumps(list(ground_truth)),
-        })
-
-        # Spot-check
-        if spot_check_done < spot_check_users and ground_truth:
-            user_vec_norm = np.linalg.norm(user_vec)
-            print(f"\n  📋 Spot-check [{dataset}/{model}] user={user_id} imp={imp_id}")
-            print(f"     History len: {len(history)}, User vector norm: {user_vec_norm:.4f}")
-            print(f"     Ground truth: {ground_truth}")
-            print(f"     Candidates: {len(candidates)}")
-            print(f"     Top-5 embedding hits:")
-            for rank, (rid, rscore) in enumerate(results[:5], 1):
-                marker = " ✓" if rid in ground_truth else ""
-                print(f"       {rank}. {rid} (sim={rscore:.4f}){marker}")
-            spot_check_done += 1
-
-        if (i + 1) % 2000 == 0:
-            logger.info("  Processed %d/%d impressions", i + 1, len(val_df))
-
-    elapsed = time.time() - t0
-
-    # ── 8. Compute average recall ─────────────────────────────────
-    result_rows = []
-    for k_val in RECALL_KS:
-        recalls = per_impression_recalls[k_val]
-        avg_recall = sum(recalls) / len(recalls) if recalls else 0.0
-        result_rows.append({
-            "dataset": dataset,
-            "model": model,
-            "retriever": "embedding",
-            "K": k_val,
-            "recall_at_K": round(avg_recall, 6),
-            "num_impressions": len(recalls),
-            "wall_clock_s": round(elapsed, 1),
-        })
-        logger.info("  recall@%d = %.4f (avg over %d impressions)", k_val, avg_recall, len(recalls))
-
-    # ── 9. Validate recall monotonicity ───────────────────────────
-    recall_values = [r["recall_at_K"] for r in result_rows]
-    for i in range(1, len(recall_values)):
-        assert recall_values[i] >= recall_values[i - 1], (
-            f"Recall monotonicity violated: recall@{RECALL_KS[i-1]}={recall_values[i-1]} > "
-            f"recall@{RECALL_KS[i]}={recall_values[i]}"
-        )
-    logger.info("  Recall monotonicity check passed")
-
-    # ── 10. Persist scored candidates ─────────────────────────────
-    out_dir = _PROJECT_ROOT / "data" / "processed"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    scores_path = out_dir / f"embed_scores_{dataset}_{model}.parquet"
-    scores_df = pl.DataFrame(all_scored)
-    scores_df.write_parquet(scores_path)
-    logger.info("  Saved scored candidates: %s (%.1f MB)", scores_path, scores_path.stat().st_size / 1024**2)
-    logger.info("  Total wall-clock: %.1fs", elapsed)
-
-    return result_rows
+    if scale == "large":
+        return _run_large(dataset, model, history_cap, spot_check_users)
+    return _run_small(dataset, model, history_cap)
 
 
 def write_results_csv(
@@ -265,111 +335,120 @@ def write_results_csv(
     path: Path,
     keys_to_replace: list[tuple[str, str]] | None = None,
 ) -> None:
-    """Write results to CSV, merging with existing rows.
-
-    Parameters
-    ----------
-    results : list[dict]
-        New result rows.
-    path : Path
-        Output CSV path.
-    keys_to_replace : list[tuple[str, str]], optional
-        ``[(dataset, model), ...]`` — existing rows matching these
-        (dataset, model) pairs are replaced.
-    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = [
-        "dataset", "model", "retriever", "K", "recall_at_K",
-        "num_impressions", "wall_clock_s",
-    ]
-    existing_rows: list[dict[str, Any]] = []
+    fieldnames = ["dataset", "model", "retriever", "K", "recall_at_K", "num_impressions", "wall_clock_s"]
+    existing: list[dict[str, Any]] = []
     if keys_to_replace and path.exists():
-        replace_set = set(keys_to_replace)
+        replace = set(keys_to_replace)
         with open(path, "r", newline="") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                key = (row["dataset"], row["model"])
-                if key not in replace_set:
-                    existing_rows.append(row)
-
-    merged = existing_rows + results
+            for row in csv.DictReader(f):
+                if (row["dataset"], row["model"]) not in replace:
+                    existing.append(row)
     with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(merged)
-    logger.info("Wrote results to %s (%d rows)", path, len(merged))
+        writer.writerows(existing + results)
 
 
 def main() -> None:
-    """CLI entry point."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
-    )
-
-    parser = argparse.ArgumentParser(
-        description="Run embedding-based retrieval + recall@K evaluation on val split.",
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s — %(message)s")
+    parser = argparse.ArgumentParser(description="Run embedding retrieval + recall@K evaluation on val split.")
     parser.add_argument(
         "--dataset",
         choices=["mind", "ebnerd", "all"],
         default="all",
-        help="Which dataset to run on (default: all).",
     )
+
+    parser.add_argument(
+        "--scale",
+        choices=["small", "large"],
+        default="small",
+    )
+
     parser.add_argument(
         "--history-cap",
         type=int,
         default=DEFAULT_HISTORY_CAP,
-        help=f"Max number of recent history articles for user vector (default: {DEFAULT_HISTORY_CAP}).",
+    )
+
+    parser.add_argument(
+        "--model",
+        choices=["minilm", "bert", "w2v"],
+        default=None,
+        help=(
+            "Run only the specified model. "
+            "For EB-NeRD use 'bert' or 'w2v'; "
+            "for MIND use 'minilm'. "
+            "When omitted, run the default model set."
+        ),
     )
     args = parser.parse_args()
 
     datasets = ["mind", "ebnerd"] if args.dataset == "all" else [args.dataset]
     all_results: list[dict[str, Any]] = []
-    keys_to_replace: list[tuple[str, str]] = []
+    replace: list[tuple[str, str]] = []
 
-    for ds in datasets:
-        # Check that feature stores exist
-        processed_dir = _PROJECT_ROOT / "data" / "processed" / ds
-        if not (processed_dir / "article_features.parquet").exists():
-            logger.error("Article features not found for %s — run `make features` first", ds)
-            sys.exit(1)
-        if not (processed_dir / "user_features.parquet").exists():
-            logger.error("User features not found for %s — run `make features` first", ds)
+    from src.common.paths import processed_dir, results_dir
+
+    for dataset in datasets:
+        pdir = processed_dir(dataset, args.scale)
+        if not (pdir / "article_features.parquet").exists():
+            logger.error("Article features not found for %s/%s", dataset, args.scale)
             sys.exit(1)
 
-        if ds == "ebnerd":
-            # Run both BERT (primary) and Word2Vec (baseline)
-            for model in ["bert", "w2v"]:
-                try:
-                    results = run_embedding_retrieval(ds, model=model, history_cap=args.history_cap)
-                    all_results.extend(results)
-                    keys_to_replace.append((ds, model))
-                except FileNotFoundError as e:
-                    logger.warning("Skipping %s/%s: %s", ds, model, e)
+        if args.scale == "large" and dataset == "ebnerd":
+            if not (pdir / "history_index_validation" / "metadata.json").exists():
+                logger.error("EB-NeRD validation history index missing")
+                sys.exit(1)
+        if args.scale == "small" and not (pdir / "user_features.parquet").exists():
+            logger.error("Small-scale user features missing; run `make features DATA_SCALE=small`")
+            sys.exit(1)
+
+        if args.model is not None:
+            if dataset == "mind" and args.model != "minilm":
+                logger.error(
+                    "MIND supports only --model minilm, got %s",
+                    args.model,
+                )
+                sys.exit(1)
+
+            if dataset == "ebnerd" and args.model == "minilm":
+                logger.error(
+                    "EB-NeRD does not use --model minilm"
+                )
+                sys.exit(1)
+
+            models = [args.model]
         else:
-            # MIND: single model
-            results = run_embedding_retrieval(ds, model="minilm", history_cap=args.history_cap)
+            models = (
+                ["bert", "w2v"]
+                if dataset == "ebnerd"
+                else ["minilm"]
+            )
+        for model in models:
+            try:
+                results = run_embedding_retrieval(dataset, model=model, history_cap=args.history_cap, scale=args.scale)
+            except FileNotFoundError as exc:
+                if dataset == "ebnerd":
+                    logger.warning("Skipping %s/%s: %s", dataset, model, exc)
+                    continue
+                raise
             all_results.extend(results)
-            keys_to_replace.append((ds, "minilm"))
+            replace.append((dataset, model))
 
-    # Write results CSV
-    results_path = _PROJECT_ROOT / "results" / "embed_recall.csv"
-    write_results_csv(all_results, results_path, keys_to_replace=keys_to_replace)
+    results_path = results_dir(args.scale) / "embed_recall.csv"
+    write_results_csv(all_results, results_path, keys_to_replace=replace)
 
-    # Print summary table
-    print(f"\n{'='*80}")
+    print("\n" + "=" * 80)
     print("Embedding Retrieval Recall Results")
-    print(f"{'='*80}")
-    print(f"{'Dataset':<10} {'Model':<10} {'K':<6} {'Recall@K':<10} {'Impressions':<12}")
-    print(f"{'-'*80}")
-    for r in all_results:
+    print("=" * 80)
+    for result in all_results:
         print(
-            f"{r['dataset']:<10} {r['model']:<10} "
-            f"{r['K']:<6} {r['recall_at_K']:<10.4f} {r['num_impressions']:<12}"
+            f"{result['dataset']:<10} {result['model']:<10} "
+            f"K={result['K']:<3} recall={result['recall_at_K']:.4f} "
+            f"n={result['num_impressions']}"
         )
-    print(f"{'='*80}")
-    print(f"\nResults saved to: {results_path}")
+    print(f"Results saved to: {results_path}")
 
 
 if __name__ == "__main__":

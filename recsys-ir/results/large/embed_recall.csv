@@ -1,0 +1,10 @@
+dataset,model,retriever,K,recall_at_K,num_impressions,wall_clock_s
+mind,minilm,embedding,50,0.929447,431517,386.6
+mind,minilm,embedding,100,0.98705,431517,386.6
+mind,minilm,embedding,200,0.999388,431517,386.6
+ebnerd,w2v,embedding,50,0.999735,1678989,3324.5
+ebnerd,w2v,embedding,100,1.0,1678989,3324.5
+ebnerd,w2v,embedding,200,1.0,1678989,3324.5
+ebnerd,bert,embedding,50,0.999579,1678989,3329.9
+ebnerd,bert,embedding,100,1.0,1678989,3329.9
+ebnerd,bert,embedding,200,1.0,1678989,3329.9

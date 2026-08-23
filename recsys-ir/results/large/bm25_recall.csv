@@ -1,0 +1,16 @@
+dataset,text_fields,use_stopwords,use_stemming,K,recall_at_K,num_impressions,wall_clock_s
+mind,title_abstract,True,False,50,0.913691,431517,912.8
+mind,title_abstract,True,False,100,0.983202,431517,912.8
+mind,title_abstract,True,False,200,0.99915,431517,912.8
+mind,title_abstract,False,False,50,0.894566,431517,1257.8
+mind,title_abstract,False,False,100,0.978681,431517,1257.8
+mind,title_abstract,False,False,200,0.998824,431517,1257.8
+mind,title_abstract,True,True,50,0.914436,431517,2235.4
+mind,title_abstract,True,True,100,0.983419,431517,2235.4
+mind,title_abstract,True,True,200,0.999157,431517,2235.4
+mind,title_abstract,False,True,50,0.895177,431517,3226.3
+mind,title_abstract,False,True,100,0.978799,431517,3226.3
+mind,title_abstract,False,True,200,0.998853,431517,3226.3
+ebnerd,title_abstract,True,False,50,0.999684,1678989,3565.1
+ebnerd,title_abstract,True,False,100,1.0,1678989,3565.1
+ebnerd,title_abstract,True,False,200,1.0,1678989,3565.1

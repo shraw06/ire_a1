@@ -81,3 +81,23 @@ recsys-ir/
 ## AI Usage Policy
 
 All AI-assisted steps are logged in [`logs/ai_usage_log.md`](logs/ai_usage_log.md).
+## Large-scale / Codabench workflow
+
+The pipeline supports an isolated large scale via `DATA_SCALE=large`:
+
+```bash
+make data DATA_SCALE=large
+make bm25 DATA_SCALE=large
+make embed DATA_SCALE=large
+make compare DATA_SCALE=large
+make eval DATA_SCALE=large
+```
+
+Large labeled artifacts are stored under `data/interim/large/` and `data/processed/large/`, while the separate unlabeled Codabench test files are consumed by:
+
+```bash
+make submit-mind
+make submit-ebnerd
+```
+
+The downloader does not depend on the obsolete `articles_large_only.zip` artifact; EB-NeRD article metadata comes from the large bundle itself.
