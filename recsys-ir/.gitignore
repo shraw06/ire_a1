@@ -9,7 +9,7 @@ data/**
 *.safetensors
 
 # Submissions
-submissions/**
+submissions/
 
 # Python
 __pycache__/
