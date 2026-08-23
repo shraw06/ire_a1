@@ -8,6 +8,9 @@ data/**
 *.bin
 *.safetensors
 
+# Submissions
+submissions/**
+
 # Python
 __pycache__/
 *.pyc
