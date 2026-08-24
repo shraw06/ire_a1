@@ -1,123 +1,85 @@
-# Design Choices: Unified Schema (MIND & EB-NeRD)
+# Design Note: Unified News Recommendation Pipeline
 
-This document outlines the core design decisions made when unifying the MIND (TSV) and EB-NeRD (Parquet) datasets into a single, shared schema (`src/common/schema.py`). The goal is to ensure all downstream code (feature engineering, retrieval, evaluation) is entirely dataset-agnostic.
+## 1. Overview
+This project implements a unified news recommendation retrieval pipeline for the MIND (English) and EB-NeRD (Danish) datasets. The original goal was to build a dataset-agnostic shared schema and evaluation harness capable of supporting both lexical and semantic retrieval. The system evolved from an initial Parquet/DuckDB-based architecture validated at small scales into a memory-mapped, dataset-native streaming architecture capable of handling the tens of millions of rows required by the `DATA_SCALE=large` benchmark.
 
-## 1. Article Structure & Body Text
+## 2. Initial Architecture
+The initial design prioritized logical unification and reproducibility via a shared schema and idempotent Makefile orchestration:
+- **Unified Article Schema**: Included `body` and `body_source` fields. EB-NeRD populated these natively, while MIND defaulted to `None` to avoid unhandled scraping failures and respect the course scope. EB-NeRD's `subtitle` was explicitly mapped to MIND's `abstract`.
+- **Entity Representation**: Standardized as a JSON string (`List[dict]`). MIND entities were parsed directly, whereas EB-NeRD entities were synthesized from `ner_clusters` and `entity_groups`.
+- **Unified Clicked History**: Modeled as `{"article_id": "str", "clicked_at": "datetime|null"}` to abstract over MIND's pre-trimmed snapshot lists and EB-NeRD's timestamped lifetime histories.
+- **Leakage-Prevention Contract**: A unified `get_user_history(user_id, as_of_ts, dataset)` signature was established.
+- **Cleaned Text**: Defined strictly as `title + " " + abstract` across both datasets, preserving missing fields as null rather than imputing them.
+- **Feature Store**: Parquet + DuckDB was chosen as the initial storage/query backend to avoid the memory overhead of pickled pandas DataFrames while sidestepping the complexity of full feature-store frameworks.
+- **Lazy Embeddings**: The `embedding_ref` column stored a lazy pointer instead of materializing large vectors twice.
 
-**The Challenge:** EB-NeRD includes full article body text, while MIND explicitly withholds it due to MSN licensing restrictions.
-**The Decision:**
-- The unified schema includes `body` and `body_source` fields for all articles.
-- **EB-NeRD:** Populates `body` natively and sets `body_source = "native"`.
-- **MIND:** Sets `body = None` and `body_source = None` by default.
-- We deliberately avoid silently dropping the `body` field from EB-NeRD, preserving the possibility of evaluating full-text retrieval on that dataset.
-- We avoid aggressive, default scraping for MIND to respect the course scope ("Lexical - titles/abstracts" per instructor clarification) and avoid unhandled failures. Scraping is gated behind a config flag (`include_mind_body`).
+## 3. What Broke at Large Scale
+While the initial logical abstractions were robust, testing against the `DATA_SCALE=large` EB-NeRD split exposed severe physical scaling limitations:
+- **Memory Exhaustion**: The initial `UserFeatureStore` eagerly materialized large behavior tables into Polars/Python dictionaries. Against EB-NeRD's ~24.6M parsed behavior rows, this caused massive memory pressure and OOM crashes.
+- **Evaluator Crashes**: The full offline evaluator (`run_eval.py`) crashed the local machine because it loaded entire behavior and score tables simultaneously.
+- **Legacy Artifacts**: Stale downstream modules continued assuming the existence of a monolithic `user_features.parquet`, which could no longer be built or safely consumed.
 
-## 2. Abstract Extraction
+These issues were purely physical engineering/scaling bottlenecks, not failures of the underlying retrieval methodology.
 
-**The Challenge:** EB-NeRD does not have an explicit `abstract` column; it uses `subtitle`.
-**The Decision:**
-- The `subtitle` column in EB-NeRD is mapped directly to the `abstract` field in the unified schema. EDA showed this has >93% coverage, aligning well with MIND's abstract usage.
+## 4. Final Large-Scale Architecture
+To scale safely, the unified logical abstraction was retained, but the physical storage and execution strategy was diverged to use dataset-native paradigms:
+- **MIND-large**: The logical clicked_history abstraction was retained, but MIND-large reads the impression-level snapshot directly from the parsed behavior record rather than constructing a separate lifetime user table.
+- **EB-NeRD-large**: Replaced the Parquet history joins with a `MemoryMappedHistoryStore`. This uses decoupled numpy arrays (`user_ids.npy`, `offsets.npy`, `article_ids.npy`, `timestamps.npy`) to provide indexed, memory-mapped access to lifetime history without materializing the complete history in RAM, enabling strict `clicked_at < as_of_timestamp` filtering at inference time without RAM explosion.
+- **Role of DuckDB**: DuckDB remains a critical tool for upstream large-data processing and temporal splitting, but it is no longer the sole physical implementation of the final user-feature store during inference.
 
-## 3. Entity Representation
+## 5. Retrieval Architecture
+The system supports both lexical and semantic candidate generation:
+- **Hand-Built BM25**: A pure-Python inverted index and graded BM25 scoring engine were implemented from scratch. To make scoring feasible in pure Python, it relies on candidate-restricted scoring and precomputed term-frequency lookups rather than iterating over full postings lists.
+- **Semantic Retrieval**: MIND leverages MiniLM, while EB-NeRD was evaluated with Word2Vec and BERT embeddings.
+- **Optimization**: All semantic scoring relies on candidate-restricted ranking and the reuse/caching of underlying article embeddings via the `embedding_ref` pointers.
 
-**The Challenge:** MIND entities are complex JSON strings with Wikidata IDs and confidences, split across title and abstract. EB-NeRD provides simple lists of strings (`ner_clusters`, `entity_groups`).
-**The Decision:**
-- We standardized on a JSON string representing a `List[dict]` with fields: `label`, `type`, `wikidata_id`, and `confidence`.
-- **MIND:** Directly parses the JSON to populate these fields.
-- **EB-NeRD:** Synthesizes this structure by pairing `ner_clusters` (as `label`) and `entity_groups` (as `type`), setting `wikidata_id` and `confidence` to `None`.
+## 6. Experimental Results
+Large-scale retrieval experiments yielded the following verified candidate-generation recall numbers:
 
-## 4. Historical Interactions (The Clicked History)
+**MIND large:**
+- BM25 Recall@50 = 0.913691
+- MiniLM Recall@50 = 0.929447
+- BM25 Recall@10 = 0.556643
+- MiniLM Recall@10 = 0.602892
 
-**The Challenge:** This is the most significant structural difference.
-- **MIND:** `history` is a space-separated string of Article IDs representing the user's state *exactly at the time of the impression*. It contains no timestamps.
-- **EB-NeRD:** History is stored in a separate `history.parquet` file, representing the user's *entire lifetime history* up to the dataset cutoff, complete with exact `impression_time_fixed` timestamps.
-**The Decision:**
-- We created a unified `clicked_history` field as a JSON list of dictionaries: `{"article_id": "str", "clicked_at": "datetime|null"}`.
-- **MIND:** Parsed into this list with `clicked_at = None`. We document the *assumption* that this is a pre-trimmed snapshot (as we cannot filter it later without timestamps).
-- **EB-NeRD:** We explicitly join `history.parquet` onto `behaviors.parquet` during ingestion to attach the full history and precise timestamps to every behavior row.
-- **Downstream Consequence:** The feature store pipeline *must* implement timestamp-aware filtering for EB-NeRD to prevent data leakage (i.e., filtering out history items that occurred *after* the current impression timestamp), while passing MIND's history through as-is.
+**EB-NeRD large:**
+- BM25 Recall@50 = 0.999684
+- Word2Vec Recall@50 = 0.999735
+- BERT Recall@50 = 0.999579
 
-## 5. Persistence Format
+Recall@100 and Recall@200 reached 1.0 across all evaluated methods; because the candidate pools are relatively small, these larger cutoffs become less discriminative. Consequently, tighter K cutoffs are far more discriminative for this dataset.
 
-**The Challenge:** Efficient storage and fast reads for downstream pipelines.
-**The Decision:**
-- All interim datasets are written as Parquet files using `polars`. This enforces strict types and schema consistency far better than CSV/TSV, speeding up subsequent data loading during training and evaluation.
+## 7. Validation vs. Test Separation
+The pipeline strictly distinguishes between labeled offline validation and unlabeled test-set inference:
+- **EB-NeRD**: The validation split contains ~12.6M behavior rows which map to ~1.68M labeled validation impressions (used for offline retrieval evaluation). The test split contains ~13.5M unlabeled impressions used *only* for Codabench prediction generation.
+- **MIND**: Follows the same strict isolation, distinguishing labeled validation from the ~2.37M-impression large test set.
+- **Principle**: Test sets are never used for offline recall or ranking evaluation because no ground-truth interaction labels are available.
 
-## 6. Null Values and Missing Data
+## 8. Comparison Observations
+Based on the verified retrieval numbers:
+- **Lexical vs. Semantic**: On MIND, MiniLM semantics improve over BM25 at low/moderate K cutoffs. On EB-NeRD, BM25, Word2Vec, and BERT are effectively tied at high K due to saturation.
+- **Slice Behavior**: While cold/warm and head/tail behavior variations exist, they are highly dataset- and retriever-dependent. Furthermore, the tail item slices observed in our comparisons were statistically very small, meaning universally strong conclusions (e.g., "warm users always perform better") should be avoided without broader distributional analysis.
 
-**The Challenge:** How to handle missing data consistently.
-**The Decision:**
-- We do not impute missing text fields (e.g., MIND's ~5% missing abstracts) during ingestion. The schema allows `None` (null) for abstracts. Downstream models (like BM25 or embedding models) are responsible for handling empty strings or nulls according to their specific requirements.
+## 9. ILD (Intra-List Diversity)
+A critical evaluation caveat is that different embedding spaces naturally exhibit different cosine-similarity geometries. Therefore, absolute ILD values should not be directly compared across datasets when they are computed from different embedding spaces/models. (e.g., MIND MiniLM vs. EB-NeRD Word2Vec/BERT). Within-dataset comparisons using the same embedding representation are more interpretable.
 
-## 7. Feature Store Backend: Parquet + DuckDB
+## 10. Anti-Gaming / Leakage Audit
+To diagnose the impact of future information leakage, we conducted an intentional diagnostic feature audit at the small/demo scale focused on article popularity (Novelty).
+- **Train-Only (Safe)**: Popularity derived strictly from training data, representing a safe serving configuration.
+- **Train+Validation (Leaked)**: Popularity derived from training and validation data, intentionally leaking future information.
 
-**The Challenge:** Choosing a storage and query backend for the feature store that is efficient, serverless, and suitable for a research assignment.
+The experiment qualitatively demonstrated that the leaked popularity signal artificially lowered measured novelty. This serves as a feature-audit diagnostic and confirms that strict temporal isolation is required for accurate serving-time simulation.
 
-**Alternatives considered:**
-- **Pickled pandas DataFrames:** Forces the entire file into memory on every load; loses columnar read efficiency.
-- **SQLite:** Row-oriented by design; poor performance for wide text and embedding columns; adds write-lock contention with no benefit.
-- **Full feature-store framework (Feast):** Correct shape for production, but requires significant setup and learning cost relative to the assignment deadline. Graders are assessing pipeline design, not infrastructure maturity.
+## 11. Offline Evaluation Limitations
+The intended evaluation harness computes AUC, MRR, nDCG@5/10, ILD, Novelty, Coverage, slicing, and bootstrap CIs. However, at `DATA_SCALE=large`, the full offline evaluator repeatedly caused local memory failures. While a streaming/memory-safe redesign was prototyped, the strict Codabench deadline required prioritizing prediction submission. Therefore, full large-scale offline evaluation was postponed, and large retrieval experiments and Codabench test inferences were completed independently.
 
-**The Decision:**
-- Use **Parquet + DuckDB** as the feature store backend.
-- DuckDB registers each Parquet file as an in-memory SQL view (`CREATE VIEW ... AS SELECT * FROM read_parquet(...)`), enabling selective columnar reads (e.g., only `title`/`abstract` for BM25, only `embedding_ref` for ANN) without materializing the full file.
-- No server process required; one pure-Python-installable dependency (`pip install duckdb`).
-- Scales to EB-NeRD's larger row counts far better than in-memory-pandas, and allows SQL-style time-filtered joins with no ingestion step.
+## 12. Codabench Submission Pipeline
+The final test-time pipeline executes as follows:
+`Unlabeled Large Test → Streaming Reader → Dataset-Native User History → Article Embeddings → User Representation → Candidate-Restricted Ranking → Prediction File → ZIP → Codabench`
 
-## 8. Cleaned Text Feature Scope
+The selected submission models were:
+- **MIND**: MiniLM (Successfully uploaded, achieving approx. rank 58/67).
+- **EB-NeRD**: Word2Vec (prediction generation complete; submission package prepared/correction in progress).
 
-**The Challenge:** Defining what "article text" means for the retrieval pipeline, given that body availability differs across datasets.
-
-**The Decision:**
-- The `cleaned_text` feature (used for BM25 indexing) is defined as **`title + " " + abstract`** only — the confirmed required scope.
-- Body text is preserved on the underlying interim article record (available for optional ablation on EB-NeRD where it is natively available), but is **not** included in `cleaned_text` by default.
-- When `abstract` is null (~5% of MIND articles), `cleaned_text` falls back to `title` only; no imputation is performed.
-- This keeps the BM25 feature construction identical across datasets and avoids a meaningless asymmetry (MIND has no body; EB-NeRD does).
-
-## 9. Embedding Reference as a Lazy Pointer
-
-**The Challenge:** Embedding vectors are large (typically 768 or 1024 floats per article). Materializing them twice - once in the article record and once in the embedding index - wastes memory and disk.
-
-**The Decision:**
-- The article feature store exposes an `embedding_ref` column (currently `null` at this stage; will point to a row index in a separate embedding store once embeddings are computed).
-- The feature store **never** materializes the embedding vector itself, it only stores the pointer.
-- The ANN retrieval module will be responsible for resolving the pointer into the actual vector from the embedding Parquet file.
-- This matches the demo bundle reality: the EB-NeRD demo zip contains no pre-computed embeddings, so `embedding_ref = null` is correct and expected.
-
-## 10. As-of-Timestamp Filtering Contract
-
-**The Challenge:** Preventing data leakage when serving user history at inference time, given that the two datasets encode history fundamentally differently.
-
-**The Decision:**
-- The function signature `get_user_history(user_id, as_of_ts, dataset)` is identical for both datasets. The implementation diverges internally:
-  - **EB-NeRD:** Strictly excludes any history entry with `clicked_at >= as_of_ts`. This is the **actual leakage-prevention mechanism** — EB-NeRD stores the user's full lifetime history (from `history.parquet`) with real per-click timestamps, so filtering is necessary.
-  - **MIND:** Returns the full snapshot unchanged (pass-through / no-op). MIND's `behaviors.tsv` already contains a pre-trimmed history snapshot as of each impression; there are no per-item timestamps to filter on. This is a **documented assumption**, not a verified guarantee - MIND provides no per-article `published_time` to independently cross-check it. The caveat is flagged in both `parse_mind.py` and `user_store.py`.
-- The as-of-timestamp unit test is written primarily against EB-NeRD's structure (where the invariant is load-bearing) and confirmed by a lighter MIND pass-through test.
-
-## 11. Makefile Idempotency
-
-**The Challenge:** A multi-stage pipeline (`download → parse → split → features`) is expensive to re-run from scratch during development. Re-running individual stages must be safe and predictable.
-
-**The Decision:**
-- Each Makefile target checks for the presence of its own output files and **skips work if outputs already exist**, unless `FORCE=1` is passed by the user.
-- The split stage uses a lightweight marker file (`data/interim/.split_done`) instead of a fragile embedded Python check, which avoids shell-escaping issues in multi-line Make recipes.
-- `make clean` removes all intermediate outputs and the marker file, resetting the pipeline to a clean state.
-- Idempotent re-runs complete in ~5ms (all skips); a fresh `make data` on real MIND-small + EB-NeRD demo data takes ~14s.
-
-## 12. Hand-Built BM25 Retrieval Engine
-
-**The Challenge:** The assignment required building an inverted index over article text from scratch, not just calling a library like `rank_bm25`. Pure Python implementation of BM25 over 120k articles is slow, especially when processing 30k+ impressions.
-
-**The Decision:**
-- Implemented a custom `InvertedIndex` and `BM25Engine` in `src/retrieval/bm25.py`.
-- `rank_bm25` is only used in tests (`tests/test_bm25_matches_reference.py`) to mathematically validate the custom IDF and scoring formulas (matching ATIRE/Lucene variant exactly).
-- **Optimization:** Instead of iterating over the full postings list for every query term, the engine supports candidate-restricted scoring. It precomputes a per-document term-frequency lookup and caches the IDF table on the index. When scoring the ~40 candidates per impression, it accesses `O(|candidates| × |query_terms|)` instead of `O(postings_len)`, achieving ~4x speedup on MIND, making the pure-Python ablation runs feasible.
-
-## 13. Evaluation Metrics and Intra-List Diversity (ILD) Caveat
-
-**The Challenge:** Comparing diversity (ILD) metrics across two fundamentally different datasets and embedding models.
-**The Decision:**
-- MIND uses MiniLM embeddings, while EB-NeRD uses Word2Vec embeddings.
-- Different embedding models produce different baseline cosine-similarity geometries in their vector spaces.
-- As a result, the **absolute ILD magnitudes are not comparable across datasets**. An ILD of ~0.94 on MIND versus ~0.18 on EB-NeRD does *not* imply that MIND recommendations are "5x more diverse". 
-- Only the **within-dataset** BM25-vs-embeddings comparison (e.g., MIND BM25 vs MIND Embeddings) is mathematically sound and meaningful for drawing conclusions.
+## 13. Engineering Lessons / Conclusion
+The project evolved from a clean, dataset-agnostic logical architecture validated at small scale into a large-scale retrieval and inference pipeline. Stress-testing the system exposed memory and materialization bottlenecks caused by eager Polars/Python processing and by the assumption of a monolithic user_features.parquet representation. Rather than discarding the original abstractions, the final design retained the shared logical interfaces while changing their physical implementation at scale: MIND uses impression-level history snapshots, EB-NeRD uses a timestamped memory-mapped history index, and large Parquet data is processed in batches. This allowed the system to complete large-scale BM25 and semantic retrieval experiments and to generate Codabench prediction artifacts while preserving the intended temporal and leakage-prevention contracts. The main remaining limitation is the full large-scale multi-metric offline evaluator, which was postponed because of local memory constraints.

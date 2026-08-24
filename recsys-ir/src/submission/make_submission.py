@@ -227,7 +227,12 @@ def generate_submission(dataset: str, args: argparse.Namespace) -> tuple[Path, P
 
     output_dir = _PROJECT_ROOT / "submissions" / dataset
     output_dir.mkdir(parents=True, exist_ok=True)
-    prediction_path = output_dir / "prediction.txt"
+    prediction_filename = (
+        "predictions.txt"
+        if dataset == "ebnerd"
+        else "prediction.txt"
+    )
+    prediction_path = output_dir / prediction_filename
     zip_path = output_dir / f"{dataset}_submission.zip"
 
     eb_history = None

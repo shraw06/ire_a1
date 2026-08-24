@@ -7,7 +7,7 @@ Lexical (BM25) and semantic (embedding) retrieval + evaluation on **MIND** (Engl
 ```bash
 # 1. Create environment & install
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]" #review
+pip install -e ".[dev]"
 
 # 2. Download data, parse, split, build features, retrieve, evaluate
 make data      # download + parse + temporal split + feature stores (~14s on MIND-small + EB-NeRD demo)
@@ -63,13 +63,13 @@ recsys-ir/
 
 ## Datasets
 
-#review 
-
 | Dataset | Language | Users | Articles | Format |
 |---------|----------|-------|----------|--------|
 | MIND (small) | English | ~50K | ~65K | TSV |
 | EB-NeRD (demo) | Danish | ~10K | ~30K | Parquet |
 | EB-NeRD (small) | Danish | ~2.7M | ~120K+ | Parquet |
+
+*Note: The `demo`/`small` bundles were used for local development, while `DATA_SCALE=large` (MIND-large and EB-NeRD-large) was used for final Codabench submissions.*
 
 ## Evaluation Metrics
 
