@@ -49,6 +49,33 @@ Large-scale retrieval experiments yielded the following verified candidate-gener
 
 Recall@100 and Recall@200 reached 1.0 across all evaluated methods; because the candidate pools are relatively small, these larger cutoffs become less discriminative. Consequently, tighter K cutoffs are far more discriminative for this dataset.
 
+### Hybrid Reranker Experiments
+
+Tested a recency-weighted history + train-split-popularity hybrid reranker as an attempt to improve leaderboard rank. Offline tuning on the validation split showed popularity weighting monotonically *decreased* AUC/MRR/nDCG@5/nDCG@10 on both datasets (MIND: AUC 0.6274→0.5776 as alpha went 1.0→0.5; EB-NeRD: AUC 0.5061→0.4373). Best alpha was 1.0 (pure embedding similarity) for both, so no hybrid submission was generated — the existing baseline embedding ranking already outperforms any popularity-blended variant on this candidate-restricted setup.
+
+MIND (431,517 validation impressions, 23,291 train-split candidate popularity entries)
+  alpha=1.0  AUC=0.6274  MRR=0.3342  nDCG@5=0.3105  nDCG@10=0.3693  (n=431,517)
+  alpha=0.9  AUC=0.6246  MRR=0.3298  nDCG@5=0.3067  nDCG@10=0.3658  (n=431,517)
+  alpha=0.8  AUC=0.6201  MRR=0.3229  nDCG@5=0.3003  nDCG@10=0.3597  (n=431,517)
+  alpha=0.7  AUC=0.6120  MRR=0.3123  nDCG@5=0.2901  nDCG@10=0.3501  (n=431,517)
+  alpha=0.6  AUC=0.5997  MRR=0.2972  nDCG@5=0.2751  nDCG@10=0.3359  (n=431,517)
+  alpha=0.5  AUC=0.5776  MRR=0.2763  nDCG@5=0.2546  nDCG@10=0.3166  (n=431,517)
+```
+EBNERD (1,678,989 validation impressions, 9,653 train-split candidate popularity entries)
+  alpha=1.0  AUC=0.5061  MRR=0.3390  nDCG@5=0.3706  nDCG@10=0.4552  (n=1,678,989)
+  alpha=0.9  AUC=0.4891  MRR=0.3212  nDCG@5=0.3514  nDCG@10=0.4397  (n=1,678,989)
+  alpha=0.8  AUC=0.4739  MRR=0.3046  nDCG@5=0.3338  nDCG@10=0.4254  (n=1,678,989)
+  alpha=0.7  AUC=0.4596  MRR=0.2919  nDCG@5=0.3195  nDCG@10=0.4142  (n=1,678,989)
+  alpha=0.6  AUC=0.4477  MRR=0.2833  nDCG@5=0.3093  nDCG@10=0.4065  (n=1,678,989)
+  alpha=0.5  AUC=0.4373  MRR=0.2765  nDCG@5=0.3012  nDCG@10=0.4006  (n=1,678,989)
+
+Saved: /home/shrawani/Desktop/sem5/Information Retrieval and Extraction/a1_again/ire_a1/recsys-ir/results/large/hybrid_alpha_tuning.csv
+
+Best alpha by AUC per dataset:
+  mind: alpha=1.0  AUC=0.6274
+  ebnerd: alpha=1.0  AUC=0.5061
+```
+
 ## 7. Validation vs. Test Separation
 The pipeline strictly distinguishes between labeled offline validation and unlabeled test-set inference:
 - **EB-NeRD**: The validation split contains ~12.6M behavior rows which map to ~1.68M labeled validation impressions (used for offline retrieval evaluation). The test split contains ~13.5M unlabeled impressions used *only* for Codabench prediction generation.
