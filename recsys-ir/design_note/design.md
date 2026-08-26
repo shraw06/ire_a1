@@ -4,109 +4,96 @@
 This project implements a unified news recommendation retrieval pipeline for the MIND (English) and EB-NeRD (Danish) datasets. The original goal was to build a dataset-agnostic shared schema and evaluation harness capable of supporting both lexical and semantic retrieval. The system evolved from an initial Parquet/DuckDB-based architecture validated at small scales into a memory-mapped, dataset-native streaming architecture capable of handling the tens of millions of rows required by the `DATA_SCALE=large` benchmark.
 
 ## 2. Initial Architecture
-The initial design prioritized logical unification and reproducibility via a shared schema and idempotent Makefile orchestration:
-- **Unified Article Schema**: Included `body` and `body_source` fields. EB-NeRD populated these natively, while MIND defaulted to `None` to avoid unhandled scraping failures and respect the course scope. EB-NeRD's `subtitle` was explicitly mapped to MIND's `abstract`.
-- **Entity Representation**: Standardized as a JSON string (`List[dict]`). MIND entities were parsed directly, whereas EB-NeRD entities were synthesized from `ner_clusters` and `entity_groups`.
-- **Unified Clicked History**: Modeled as `{"article_id": "str", "clicked_at": "datetime|null"}` to abstract over MIND's pre-trimmed snapshot lists and EB-NeRD's timestamped lifetime histories.
-- **Leakage-Prevention Contract**: A unified `get_user_history(user_id, as_of_ts, dataset)` signature was established.
-- **Cleaned Text**: Defined strictly as `title + " " + abstract` across both datasets, preserving missing fields as null rather than imputing them.
-- **Feature Store**: Parquet + DuckDB was chosen as the initial storage/query backend to avoid the memory overhead of pickled pandas DataFrames while sidestepping the complexity of full feature-store frameworks.
+- **Unified Article Schema**: Included `body` and `body_source` fields. EB-NeRD populated these natively, while MIND defaulted to `None`. EB-NeRD's `subtitle` was mapped to MIND's `abstract`.
+- **Entity Representation**: Standardized as a JSON string (`List[dict]`). MIND entities were parsed directly; EB-NeRD entities were synthesized from `ner_clusters` and `entity_groups`.
+- **Unified Clicked History**: `{"article_id": "str", "clicked_at": "datetime|null"}`, abstracting over MIND's pre-trimmed snapshot lists and EB-NeRD's timestamped lifetime histories.
+- **Leakage-Prevention Contract**: A unified `get_user_history(user_id, as_of_ts, dataset)` signature.
+- **Cleaned Text**: `title + " " + abstract`, preserving missing fields as null rather than imputing.
+- **Feature Store**: Parquet + DuckDB, avoiding pickled-DataFrame memory overhead and full feature-store framework complexity.
 - **Lazy Embeddings**: The `embedding_ref` column stored a lazy pointer instead of materializing large vectors twice.
 
 ## 3. What Broke at Large Scale
-While the initial logical abstractions were robust, testing against the `DATA_SCALE=large` EB-NeRD split exposed severe physical scaling limitations:
-- **Memory Exhaustion**: The initial `UserFeatureStore` eagerly materialized large behavior tables into Polars/Python dictionaries. Against EB-NeRD's ~24.6M parsed behavior rows, this caused massive memory pressure and OOM crashes.
-- **Evaluator Crashes**: The full offline evaluator (`run_eval.py`) crashed the local machine because it loaded entire behavior and score tables simultaneously.
-- **Legacy Artifacts**: Stale downstream modules continued assuming the existence of a monolithic `user_features.parquet`, which could no longer be built or safely consumed.
+- **Memory Exhaustion**: The initial `UserFeatureStore` eagerly materialized behavior tables into Polars/Python dictionaries; against EB-NeRD's ~24.6M parsed behavior rows this caused OOM crashes.
+- **Evaluator Crashes**: `run_eval.py` crashed the local machine loading entire behavior and score tables simultaneously.
+- **Legacy Artifacts**: Stale downstream modules assumed a monolithic `user_features.parquet` that could no longer be safely built or consumed.
 
-These issues were purely physical engineering/scaling bottlenecks, not failures of the underlying retrieval methodology.
+These were physical engineering/scaling bottlenecks, not failures of the underlying retrieval methodology.
 
 ## 4. Final Large-Scale Architecture
-To scale safely, the unified logical abstraction was retained, but the physical storage and execution strategy was diverged to use dataset-native paradigms:
-- **MIND-large**: The logical clicked_history abstraction was retained, but MIND-large reads the impression-level snapshot directly from the parsed behavior record rather than constructing a separate lifetime user table.
-- **EB-NeRD-large**: Replaced the Parquet history joins with a `MemoryMappedHistoryStore`. This uses decoupled numpy arrays (`user_ids.npy`, `offsets.npy`, `article_ids.npy`, `timestamps.npy`) to provide indexed, memory-mapped access to lifetime history without materializing the complete history in RAM, enabling strict `clicked_at < as_of_timestamp` filtering at inference time without RAM explosion.
-- **Role of DuckDB**: DuckDB remains a critical tool for upstream large-data processing and temporal splitting, but it is no longer the sole physical implementation of the final user-feature store during inference.
+- **MIND-large**: Reads the impression-level snapshot directly from the parsed behavior record rather than building a separate lifetime user table.
+- **EB-NeRD-large**: Replaced Parquet history joins with a `MemoryMappedHistoryStore` — decoupled numpy arrays (`user_ids.npy`, `offsets.npy`, `article_ids.npy`, `timestamps.npy`) giving indexed, memory-mapped access without materializing full history in RAM, enabling strict `clicked_at < as_of_timestamp` filtering at inference time.
+- **DuckDB**: Remains critical for upstream large-data processing and temporal splitting, but is no longer the sole physical implementation of the final user-feature store at inference time.
 
 ## 5. Retrieval Architecture
-The system supports both lexical and semantic candidate generation:
-- **Hand-Built BM25**: A pure-Python inverted index and graded BM25 scoring engine were implemented from scratch. To make scoring feasible in pure Python, it relies on candidate-restricted scoring and precomputed term-frequency lookups rather than iterating over full postings lists.
-- **Semantic Retrieval**: MIND leverages MiniLM, while EB-NeRD was evaluated with Word2Vec and BERT embeddings.
-- **Optimization**: All semantic scoring relies on candidate-restricted ranking and the reuse/caching of underlying article embeddings via the `embedding_ref` pointers.
+- **Hand-Built BM25**: Pure-Python inverted index and graded BM25 scoring, using candidate-restricted scoring and precomputed term-frequency lookups instead of full postings-list iteration.
+- **Semantic Retrieval**: MIND uses MiniLM; EB-NeRD was evaluated with Word2Vec and BERT.
+- **Optimization**: All semantic scoring relies on candidate-restricted ranking and cached embeddings via `embedding_ref` pointers.
 
 ## 6. Experimental Results
-Large-scale retrieval experiments yielded the following verified candidate-generation recall numbers:
 
-**MIND large:**
-- BM25 Recall@50 = 0.913691
-- MiniLM Recall@50 = 0.929447
-- BM25 Recall@10 = 0.556643
-- MiniLM Recall@10 = 0.602892
+**MIND large:** BM25 Recall@50 = 0.9137, MiniLM Recall@50 = 0.9294, BM25 Recall@10 = 0.5566, MiniLM Recall@10 = 0.6029.
+**EB-NeRD large:** BM25 Recall@50 = 0.9997, Word2Vec Recall@50 = 0.9997, BERT Recall@50 = 0.9996.
 
-**EB-NeRD large:**
-- BM25 Recall@50 = 0.999684
-- Word2Vec Recall@50 = 0.999735
-- BERT Recall@50 = 0.999579
+Recall@100/@200 reached 1.0 across all methods — candidate pools are small enough that these cutoffs stop being discriminative, so tighter K is more informative here.
 
-Recall@100 and Recall@200 reached 1.0 across all evaluated methods; because the candidate pools are relatively small, these larger cutoffs become less discriminative. Consequently, tighter K cutoffs are far more discriminative for this dataset.
+### 6.1 Reranking Experiments
 
-### Hybrid Reranker Experiments
+Three reranking strategies were tuned offline on cached validation scores (never on test/leaderboard data) before paying for the hours-long cost of live test-set inference.
 
-Tested a recency-weighted history + train-split-popularity hybrid reranker as an attempt to improve leaderboard rank. Offline tuning on the validation split showed popularity weighting monotonically *decreased* AUC/MRR/nDCG@5/nDCG@10 on both datasets (MIND: AUC 0.6274→0.5776 as alpha went 1.0→0.5; EB-NeRD: AUC 0.5061→0.4373). Best alpha was 1.0 (pure embedding similarity) for both, so no hybrid submission was generated — the existing baseline embedding ranking already outperforms any popularity-blended variant on this candidate-restricted setup.
+**Experiment A — Popularity hybrid.** Recency-weighted history + train-split popularity, blended with embedding via weight alpha. Popularity monotonically *hurt* both datasets (MIND: AUC 0.6274→0.5776 as alpha 1.0→0.5; EB-NeRD: 0.5061→0.4373). Best alpha=1.0 (pure embedding) for both — no benefit from popularity. Full sweep in `results/large/hybrid_alpha_tuning.csv`.
 
-MIND (431,517 validation impressions, 23,291 train-split candidate popularity entries)
-  alpha=1.0  AUC=0.6274  MRR=0.3342  nDCG@5=0.3105  nDCG@10=0.3693  (n=431,517)
-  alpha=0.9  AUC=0.6246  MRR=0.3298  nDCG@5=0.3067  nDCG@10=0.3658  (n=431,517)
-  alpha=0.8  AUC=0.6201  MRR=0.3229  nDCG@5=0.3003  nDCG@10=0.3597  (n=431,517)
-  alpha=0.7  AUC=0.6120  MRR=0.3123  nDCG@5=0.2901  nDCG@10=0.3501  (n=431,517)
-  alpha=0.6  AUC=0.5997  MRR=0.2972  nDCG@5=0.2751  nDCG@10=0.3359  (n=431,517)
-  alpha=0.5  AUC=0.5776  MRR=0.2763  nDCG@5=0.2546  nDCG@10=0.3166  (n=431,517)
-```
-EBNERD (1,678,989 validation impressions, 9,653 train-split candidate popularity entries)
-  alpha=1.0  AUC=0.5061  MRR=0.3390  nDCG@5=0.3706  nDCG@10=0.4552  (n=1,678,989)
-  alpha=0.9  AUC=0.4891  MRR=0.3212  nDCG@5=0.3514  nDCG@10=0.4397  (n=1,678,989)
-  alpha=0.8  AUC=0.4739  MRR=0.3046  nDCG@5=0.3338  nDCG@10=0.4254  (n=1,678,989)
-  alpha=0.7  AUC=0.4596  MRR=0.2919  nDCG@5=0.3195  nDCG@10=0.4142  (n=1,678,989)
-  alpha=0.6  AUC=0.4477  MRR=0.2833  nDCG@5=0.3093  nDCG@10=0.4065  (n=1,678,989)
-  alpha=0.5  AUC=0.4373  MRR=0.2765  nDCG@5=0.3012  nDCG@10=0.4006  (n=1,678,989)
+*Note:* the initial per-row, per-alpha evaluation loop (JSON parsing + `sklearn.roc_auc_score` per impression per weight, in pure Python) does not scale to MIND's 431K / EB-NeRD's 1.68M validation impressions — an equivalent naive loop in Experiment B ran 6+ hours before crashing. Fix: parse JSON once per row and reuse across all weights, replace per-row sklearn calls with a vectorized rank-sum AUC, and checkpoint per dataset. This cut the full sweep to single-digit seconds.
 
-Saved: /home/shrawani/Desktop/sem5/Information Retrieval and Extraction/a1_again/ire_a1/recsys-ir/results/large/hybrid_alpha_tuning.csv
+**Experiment B — BM25 + embedding linear blend (no popularity).** Since BM25 underperforms embedding in isolation, tested whether it still carries *independent* signal via `beta*embedding + (1-beta)*bm25`, min-max normalized, swept over beta.
 
-Best alpha by AUC per dataset:
-  mind: alpha=1.0  AUC=0.6274
-  ebnerd: alpha=1.0  AUC=0.5061
-```
+| Dataset | Best beta | Best AUC | Pure-embed AUC | Lift |
+|---|---|---|---|---|
+| MIND | 0.8 | 0.6298 | 0.6277 | +0.33% relative |
+| EB-NeRD | 1.0 | 0.5062 | 0.5062 | none |
+
+MIND's lift was non-trivial enough to justify a live test submission (`mind_bm25embed_submission.zip`); EB-NeRD's null result meant skipping its ~15h live-inference run entirely.
+
+| Submission | Score |
+|---|---|
+| `mind_submission.zip` (baseline, pure embedding) | 0.5212 |
+| `mind_hybrid_submission.zip` (Exp. A, popularity) | 0.5196 |
+| `mind_bm25embed_submission.zip` (Exp. B, beta=0.8) | 0.5211 |
+
+The validation-set lift did **not** survive to the test set (0.5211 vs 0.5212, within noise) — three separate linear/heuristic combinations of the same signals all landed within noise of each other on the leaderboard, suggesting the ceiling wasn't in the blend weights but in the blend being linear at all.
+
+**Experiment C — Gradient-boosted nonlinear combiner.** A `HistGradientBoostingClassifier` per dataset, trained on candidate-level examples with five features (normalized embed/BM25 scores, their rank-percentiles within the candidate list, and their difference), evaluated via group-wise held-out AUC (20% impression-grouped split).
+
+| Dataset | Combiner AUC | Best linear blend AUC | Result |
+|---|---|---|---|
+| MIND | 0.6193 | 0.6298 | Worse — not submitted |
+| EB-NeRD | 0.5460 | 0.5062 | **+8% relative** — only genuine EB-NeRD lift found |
+
+MIND: added capacity found nothing the linear blend hadn't already found, so no MIND submission was generated for this model. EB-NeRD: unlike every linear combination tried, the nonlinear combiner found real signal — suggesting BM25 corrects embedding only in specific rank-agreement regimes a fixed weight can't express. Generating its test predictions was estimated at ~15h; since an EB-NeRD submission was not required for this deliverable, it was **deliberately not run** (model saved at `results/large/combiner_ebnerd.joblib`, generation script implemented but unexecuted).
+
+**Summary:** `mind_submission.zip` (0.5212) remains the best submitted MIND score. Every reranking variant matched it within noise or underperformed on the actual test set, despite two of three looking better offline — a reminder that validation lift wasn't a reliable predictor of test-set lift here, and the one real improvement found (Exp. C, EB-NeRD) was in the dataset out of scope for submission.
 
 ## 7. Validation vs. Test Separation
-The pipeline strictly distinguishes between labeled offline validation and unlabeled test-set inference:
-- **EB-NeRD**: The validation split contains ~12.6M behavior rows which map to ~1.68M labeled validation impressions (used for offline retrieval evaluation). The test split contains ~13.5M unlabeled impressions used *only* for Codabench prediction generation.
-- **MIND**: Follows the same strict isolation, distinguishing labeled validation from the ~2.37M-impression large test set.
-- **Principle**: Test sets are never used for offline recall or ranking evaluation because no ground-truth interaction labels are available.
+Labeled validation is strictly separated from unlabeled test inference: EB-NeRD's ~12.6M validation behavior rows map to ~1.68M labeled impressions; MIND's large test set has ~2.37M impressions. Test sets are never used for offline evaluation since no ground-truth labels exist there — the reranking sweeps and the combiner's held-out split all ran exclusively on validation scores, with live test inference reserved for configurations that showed validation-side improvement worth the cost.
 
 ## 8. Comparison Observations
-Based on the verified retrieval numbers:
-- **Lexical vs. Semantic**: On MIND, MiniLM semantics improve over BM25 at low/moderate K cutoffs. On EB-NeRD, BM25, Word2Vec, and BERT are effectively tied at high K due to saturation.
-- **Slice Behavior**: While cold/warm and head/tail behavior variations exist, they are highly dataset- and retriever-dependent. Furthermore, the tail item slices observed in our comparisons were statistically very small, meaning universally strong conclusions (e.g., "warm users always perform better") should be avoided without broader distributional analysis.
+On MIND, MiniLM improves over BM25 at low/moderate K. On EB-NeRD, BM25/Word2Vec/BERT are effectively tied at high K due to saturation — consistent with the reranking results, where BM25 added only marginal, non-durable value on MIND and none linearly on EB-NeRD. Cold/warm and head/tail slice effects exist but are dataset- and retriever-dependent, and tail slices were statistically small, so broad claims (e.g. "warm users always perform better") should be avoided.
 
 ## 9. ILD (Intra-List Diversity)
-A critical evaluation caveat is that different embedding spaces naturally exhibit different cosine-similarity geometries. Therefore, absolute ILD values should not be directly compared across datasets when they are computed from different embedding spaces/models. (e.g., MIND MiniLM vs. EB-NeRD Word2Vec/BERT). Within-dataset comparisons using the same embedding representation are more interpretable.
+Different embedding spaces have different cosine-similarity geometries, so absolute ILD should not be compared across datasets computed from different embedding models (MIND MiniLM vs. EB-NeRD Word2Vec/BERT). Within-dataset comparisons using the same representation are more interpretable.
 
 ## 10. Anti-Gaming / Leakage Audit
-To diagnose the impact of future information leakage, we conducted an intentional diagnostic feature audit at the small/demo scale focused on article popularity (Novelty).
-- **Train-Only (Safe)**: Popularity derived strictly from training data, representing a safe serving configuration.
-- **Train+Validation (Leaked)**: Popularity derived from training and validation data, intentionally leaking future information.
-
-The experiment qualitatively demonstrated that the leaked popularity signal artificially lowered measured novelty. This serves as a feature-audit diagnostic and confirms that strict temporal isolation is required for accurate serving-time simulation.
+A diagnostic feature audit (small/demo scale) compared train-only popularity (safe) against train+validation popularity (intentionally leaked), showing the leaked signal artificially lowered measured novelty — confirming strict temporal isolation is required for accurate serving-time simulation. The reranking experiments in §6.1 respected the same contract: all popularity/rank features came strictly from train/validation-scoped scores, never from test labels.
 
 ## 11. Offline Evaluation Limitations
-The intended evaluation harness computes AUC, MRR, nDCG@5/10, ILD, Novelty, Coverage, slicing, and bootstrap CIs. However, at `DATA_SCALE=large`, the full offline evaluator repeatedly caused local memory failures. While a streaming/memory-safe redesign was prototyped, the strict Codabench deadline required prioritizing prediction submission. Therefore, full large-scale offline evaluation was postponed, and large retrieval experiments and Codabench test inferences were completed independently.
+The full evaluator (AUC, MRR, nDCG@5/10, ILD, Novelty, Coverage, slicing, bootstrap CIs) repeatedly caused memory failures at `DATA_SCALE=large`. A streaming redesign was prototyped but deprioritized under the Codabench deadline in favor of prediction submission. A narrower version of the same problem hit the reranker tuning scripts (§6.1) and was fixed locally (single-pass parsing, vectorized AUC, checkpointing) without needing the full evaluator redesign, since tuning only needs AUC/MRR/nDCG over cached scores, not the full metric suite.
 
 ## 12. Codabench Submission Pipeline
-The final test-time pipeline executes as follows:
 `Unlabeled Large Test → Streaming Reader → Dataset-Native User History → Article Embeddings → User Representation → Candidate-Restricted Ranking → Prediction File → ZIP → Codabench`
 
-The selected submission models were:
-- **MIND**: MiniLM (Successfully uploaded, achieving approx. rank 58/67).
-- **EB-NeRD**: Word2Vec (prediction generation complete; submission package prepared/correction in progress).
+- **MIND**: MiniLM pure-embedding ranking submitted (~rank 58/67, score 0.5212). BM25 blend (0.5211) and popularity hybrid (0.5196) were also submitted for comparison but did not improve on baseline; the gradient-boosted combiner was trained but not submitted (held-out AUC below the blend's).
+- **EB-NeRD**: Word2Vec pure-embedding ranking (prediction generation complete; submission package prepared/correction in progress). The combiner showed a genuine +8% relative validation AUC improvement but was not submitted — its ~15h test-inference cost wasn't justified given an EB-NeRD submission wasn't required here; model and script are retained for future use.
 
 ## 13. Engineering Lessons / Conclusion
-The project evolved from a clean, dataset-agnostic logical architecture validated at small scale into a large-scale retrieval and inference pipeline. Stress-testing the system exposed memory and materialization bottlenecks caused by eager Polars/Python processing and by the assumption of a monolithic user_features.parquet representation. Rather than discarding the original abstractions, the final design retained the shared logical interfaces while changing their physical implementation at scale: MIND uses impression-level history snapshots, EB-NeRD uses a timestamped memory-mapped history index, and large Parquet data is processed in batches. This allowed the system to complete large-scale BM25 and semantic retrieval experiments and to generate Codabench prediction artifacts while preserving the intended temporal and leakage-prevention contracts. The main remaining limitation is the full large-scale multi-metric offline evaluator, which was postponed because of local memory constraints.
+The project evolved from a clean, dataset-agnostic logical architecture into a large-scale pipeline, retaining shared logical interfaces (unified history, leakage contract) while diverging physical implementation per dataset: MIND uses impression-level snapshots, EB-NeRD uses a memory-mapped history index, and large Parquet data is processed in batches.
+
+The reranking experiments reinforced the same lesson at the modeling layer: each of three successive attempts to beat pure-embedding ranking was tuned cheaply offline before committing to expensive live inference, and two were correctly rejected before consuming a submission slot or hours of compute. The one approach that did show genuine improvement (the combiner, on EB-NeRD) was deliberately not pursued to submission given it was out of scope and disproportionately costly relative to remaining time — a scope decision, not a failure to find signal. The main remaining limitation is the full large-scale multi-metric offline evaluator, postponed due to local memory constraints.
