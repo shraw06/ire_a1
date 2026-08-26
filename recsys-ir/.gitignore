@@ -45,3 +45,6 @@ Thumbs.db
 
 # Logs (keep the template, ignore runtime logs)
 logs/*.log
+
+# Model artifacts (reproducible from scripts; not source code)
+*.joblib
