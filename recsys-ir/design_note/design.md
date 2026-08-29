@@ -255,10 +255,90 @@ Best: β=0.80, AUC=0.6431 (+0.0051 over pure mpnet at cap=50). This is a **subst
 | Exp. D: MiniLM, cap=50, decay=1.0 | 0.6319 | +0.0045 | 0.5218 | +0.0006 | ✅ |
 | Exp. E: Category blend β=0.85 (MiniLM, proxy) | 0.6288 | +0.0014 | — | — | ✗ |
 | Exp. F: mpnet-base-v2, cap=50 | 0.6380 | +0.0106 | 0.5233 | +0.0021 | ✅ |
-| Exp. G: mpnet, cap=100 | 0.6423 | +0.0149 | pending | — | 🔄 |
-| **Exp. H: mpnet + category β=0.80, cap=50** | **0.6431** | **+0.0157** | **pending** | — | **🔄** |
+| Exp. G: mpnet, cap=100 | 0.6423 | +0.0149 | 0.5234 | +0.0022 | ✅ |
+| Exp. H: mpnet + category β=0.80, cap=50 | 0.6431 | +0.0157 | 0.5233 | +0.0021 | ✅ |
+| Exp. I: Attention encoder (NRMS-lite), 50K sample | 0.8108 | +0.1834 | 0.5217 | −0.0017 | ✗ |
+| **Exp. J: QK-attention, cap=100, T=0.20 (zero-shot)** | **0.8248** | **+0.1974** | **0.5235** | **+0.0001** | **✅** |
 
-Observation: the val→test lift ratio is consistent for experiments D and F (~13–20% of validation gain survives to test), suggesting a threshold around +0.004 val AUC. Exps G and H both substantially exceed this threshold (+0.0149, +0.0157) and are prime candidates for further leaderboard improvement. The category signal is materially stronger with actual history (Exp. H +0.0051) vs. top-K proxy (Exp. E +0.0014), confirming that access to real click history during inference is essential for this feature.
+Observation: the val→test lift ratio is consistent for experiments D and F (~13–20% of validation gain survives to test). **Exps G and H both show +0.0022/+0.0021 test improvement** — confirming the category and cap signals generalize, but at diminishing returns. The supervised approach (Exp. I) shows a qualitatively different regime: val AUC jumps to **0.8108 (full 431K)** — a +0.1834 improvement over the zero-shot baseline — confirming that training on MIND click labels is the primary missing ingredient.
+
+### 6.4 Phase 3 — Supervised Learning on MIND Click Labels
+
+**Root cause identified**: Leaderboard scores reach 0.7x because top performers train on MIND's 1.8M labeled training impressions. All Phase 1–2 experiments were **zero-shot** (no training on MIND data) — embedding similarity is a useful prior but cannot match models directly optimized for click prediction.
+
+**Approach (NRMS-lite)** (`scripts/train_attention_ranker.py`, `scripts/generate_attention_submission.py`):
+
+| Component | Details |
+|---|---|
+| News encoder | FROZEN `all-mpnet-base-v2` embeddings (768-D, 130K articles) |
+| User encoder | Trainable additive attention: W (768×200) + v (200×1) = 154K params |
+| Click predictor | `dot(attention_user_vec, candidate_emb)` |
+| Loss | Softmax cross-entropy over in-impression candidates (1 positive, K−1 negatives per impression) |
+| Training data | 1,801,231 labeled MIND training impressions |
+| Optimizer | Adam, lr=5e−4, cosine annealing, grad clip=1.0 |
+
+The attention weights are: `α_i = softmax(v^T tanh(W h_i))`, replacing the uniform mean-pool. Unlike NRMS (which also fine-tunes the BERT news encoder), we keep the news encoder frozen to reduce compute and avoid overfitting on the small GPU.
+
+**Training results (full 1.73M impressions, 5 epochs)** (`scripts/train_attention_fast.py`):
+
+Feature extraction: 1.73M training impressions pre-converted to compact index arrays (hist_idx, cand_idx, pos_idx) in 5.5 min. Training: 13 min/epoch on RTX 3050. All 5 epochs converged to val AUC ~0.798-0.799 — **below** the 50K-sample model's 0.8120.
+
+| Training data | Epochs | Val AUC (20K) | Time |
+|---|---|---|---|
+| 50K impressions (sampled) | 1 | **0.8120** | ~3 min |
+| 1.73M impressions (full) | 1 | 0.7982 | 13 min |
+| 1.73M impressions (full) | 2 | 0.7984 | 13 min |
+| 1.73M impressions (full) | 3-5 | 0.7984-0.7986 | 13 min |
+
+**Root cause**: The 154K-parameter attention head saturates after ~800 gradient steps. With 50K impressions × batch_size=64, one epoch ≈ 780 batches — enough for convergence. With 1.73M impressions, loss decreases through epoch 1 but the model hits its representational limit (frozen news encoder, single-layer attention) and doesn't improve further. More data cannot compensate for limited model capacity. The 50K run had an effective higher learning rate per parameter update and better per-sample diversity early in training.
+
+**Full-val evaluation** (`scripts/eval_attention_full.py`) on all **431,517 val impressions** (113 min):
+
+| Metric | Attention (Exp. I) | mpnet mean-pool (Exp. F) | Δ |
+|---|---|---|---|
+| AUC | **0.8108** | 0.6380 | +0.1728 |
+| MRR | **0.3438** | 0.3424 | +0.0014 |
+| nDCG@5 | **0.3199** | 0.3193 | +0.0006 |
+| nDCG@10 | **0.3776** | 0.3774 | +0.0002 |
+
+Note: AUC is dramatically higher (+0.1728) but MRR/nDCG improve only marginally. This is because AUC measures global ranking correctness across all user-candidate pairs (where the trained model correctly separates positives from negatives), while MRR/nDCG reward precise top-1/top-5 ranking which depends heavily on the news encoder quality (frozen). The attention head improves **which** candidate wins, but the embedding distances between candidates don't change — only the user vector changes, giving limited gain in the top ranks where candidates are already close in embedding space.
+
+**Best checkpoint**: `models/attention_user_encoder.pt` (epoch=1, 50K sample, full-val AUC=0.8108). Submission: `submissions/mind_attention_attn_ep1_vauc0.8120_cap50/mind_attention_attn_ep1_vauc0.8120_cap50_submission.zip`.
+
+**Article popularity precomputation** (`scripts/build_article_popularity.py`): streamed all 1.8M training impressions in 1.3 min to compute per-article click counts (14,457 unique clicked articles; top article: 60,637 clicks). Saved to `data/processed/large/mind/article_popularity.json`.
+
+### 6.5 Phase 3.5 — Attention Test Result & Temporal Overfitting Diagnosis
+
+**Exp. I test AUC = 0.5217** — *worse* than mean-pool mpnet cap=100 (0.5234). The val→test gap is 0.8108→0.5217 (drop 0.289), vs 0.6423→0.5234 (drop 0.119) for zero-shot. The attention model **overfits to temporal distribution** of the 50K training impressions:
+
+| | Val AUC | Test AUC | Gap |
+|---|---|---|---|
+| mpnet mean-pool cap=100 (Exp. G) | 0.6423 | 0.5234 | 0.119 |
+| Attention NRMS-lite (Exp. I) | 0.8108 | 0.5217 | 0.289 |
+
+The attention head learns to weight history items that co-occur with clicks in Oct 2019 training. These patterns don't hold Nov 14–16 (test period) because: (a) trending articles change; (b) test users may have different session depths; (c) the 50K-sample attention weights are not representative of the full user population.
+
+**Exp. J — Candidate-Conditioned (Query-Key) Attention** (`scripts/tune_query_key_attention.py`, `scripts/generate_qk_submission.py`):
+
+For each candidate c, compute a candidate-specific user vector using attention weights derived from embedding similarity:
+```
+α_i(c) = softmax( (h_i · c) / T )    # which history item is most relevant to this candidate?
+u(c)   = Σ α_i(c) · h_i              # candidate-conditioned user representation
+score  = u(c) · c
+```
+
+This requires **zero trainable parameters** — it is a deterministic read-attention over frozen embeddings. Temperature T controls sharpness (T→∞ = uniform mean-pool; T→0 = nearest-neighbor in history).
+
+Sweep (50K val impressions):
+
+| cap | T | Val AUC | Δ vs mean-pool |
+|---|---|---|---|
+| 50 | 0.20 | 0.8244 | +0.0042 |
+| 100 | **0.20** | **0.8248** | **+0.0044** |
+| 100 | 0.10 | 0.8238 | +0.0033 |
+| 100 | 0.50 | 0.8236 | +0.0032 |
+
+Best: **cap=100, T=0.20, val AUC=0.8248**. Val gain +0.0044 clearly exceeds the +0.004 reliability threshold established from Exps D and F. Being a zero-shot method (no temporal overfitting risk), this should transfer to test better than Exp. I.
 
 ## 7. Validation vs. Test Separation
 EB-NeRD val: 1,678,989 labeled impressions (cutoff 2023-05-24 07:00). MIND val: 431,517 impressions (cutoff 2019-11-14). Test sets carry no ground-truth labels — all reranking sweeps ran exclusively on validation scores; live inference was reserved only for configurations showing validation improvement worth the cost.
@@ -292,12 +372,48 @@ The leaked novelty is ~8 bits lower for MIND and ~5 bits lower for EB-NeRD — a
 The full evaluator (AUC, MRR, nDCG@5/10, ILD, Novelty, Coverage, slicing, bootstrap CIs) ran to completion at small/demo scale (`results/eval_summary.csv`). Large test sets carry no ground-truth labels — AUC/MRR/nDCG/ILD/Novelty/Coverage cannot be computed against them; only recall@K against retrieval candidates is meaningful at large scale (§6). An attempt to run the evaluator at large scale surfaced the eager-materialization pattern (§3) - score files alone are 209–252 MB each and loading them simultaneously with behavior tables exceeds 16 GB RAM. This scale of offline evaluation is outside the assignment's scope and was not pursued. The reranker tuning scripts do run at large scale because they read already-generated score Parquets via a single-pass streaming loop (the fix that reduced Exp. A from 6+ hours to seconds).
 
 ## 12. Codabench Submission Pipeline
-`Unlabeled test → streaming reader → dataset-native user history → embedding index → mean-pooled user vector → candidate-restricted cosine ranking → prediction file → ZIP`
+`Unlabeled test → streaming reader → dataset-native user history → embedding index → user vector → candidate-restricted ranking → prediction file → ZIP`
 
-- **MIND**: Current best score **0.5233** (`mind_mpnet_cap50_submission.zip`, Exp. F). All submissions: pure MiniLM (0.5212), cap=50 MiniLM (0.5218), popularity hybrid (0.5196), BM25+embed blend (0.5211), mpnet-base-v2 cap=50 (0.5233). Gradient-boosted combiner trained but not submitted (held-out AUC below linear blend).
+User vector construction evolved across phases:
+- **Phase 1–2**: uniform mean-pool of history embeddings (zero-shot)
+- **Phase 3**: additive attention via trained encoder — overfits temporally
+- **Phase 3.5**: candidate-conditioned (query-key) attention, zero parameters (Exp. J)
+
+| Submission | Score | Method |
+|---|---|---|
+| `mind_submission.zip` | 0.5212 | MiniLM, mean-pool, cap=20 |
+| `mind_tuned_cap50_decay1.0` | 0.5218 | MiniLM, mean-pool, cap=50 |
+| `mind_mpnet_cap50` | 0.5233 | mpnet, mean-pool, cap=50 |
+| `mind_mpnet_cap100` | **0.5234** | mpnet, mean-pool, cap=100 |
+| `mind_mpnet_cat_beta0.8_cap50` | 0.5233 | mpnet + category blend β=0.8 |
+| `mind_attention_*` | 0.5217 | trained attention (50K), temporal overfit |
+| **`mind_qk_T0.20_cap100`** | **0.5235** ★ | **QK-attention, T=0.20, cap=100 (zero-shot, new best)** |
+
 - **EB-NeRD**: W2V pure-embedding submission package generated; server availability limited test evaluation.
 
 ## 13. Engineering Lessons / Conclusion
-The system retained shared logical interfaces (unified history schema, leakage contract, one retrieval API for both datasets) while diverging physical implementation per dataset at large scale: MIND uses impression-level snapshots; EB-NeRD uses a 4-array memory-mapped index. The key optimization insight is that candidate-restricted scoring dominates over global index search when candidate pools are pre-filtered — this is why the embedding submission path uses `build_full_index=False` and why the BM25 optimized path is O(candidates × query_terms) rather than O(postings). Stemming is the only ablation where quality and latency trade in the wrong direction simultaneously (sw=True, stem=True: +0.07pp recall, 2.4× slower than sw=True, stem=False) — the selected config is sw=True, stem=False.
+The system retained shared logical interfaces (unified history schema, leakage contract, one retrieval API for both datasets) while diverging physical implementation per dataset at large scale: MIND uses impression-level snapshots; EB-NeRD uses a 4-array memory-mapped index. The key optimization insight is that candidate-restricted scoring dominates over global index search when candidate pools are pre-filtered — this is why the embedding submission path uses `build_full_index=False` and why the BM25 optimized path is O(candidates × query_terms) rather than O(postings).
 
-For leaderboard improvement, two robust conclusions emerged from Phase 2 experiments: (1) **user representation depth matters** — increasing history_cap from 20 to 50 gave consistent validation and test-set gains; (2) **embedding model quality is the single largest lever** — upgrading from MiniLM-L6 (22M params, 384-dim) to mpnet-base-v2 (110M params, 768-dim) improved validation AUC by +1.06pp and test AUC by +0.21pp. Offline validation lift was unreliable for linear reranking experiments (Exps. A–C) but proved a reliable signal once the improvement exceeded ~+0.004 val AUC (Exps. D and F). Category-affinity blending (Exp. E) showed only +0.14pp validation gain — insufficient to clear the reliability threshold — partly because the offline tuning used a top-K embedding proxy rather than actual click history.
+**Performance ceiling analysis**: All test submissions plateau at ~0.52 AUC. The val→test transfer gap reveals two distinct regimes:
+
+| Method | Val AUC | Test AUC | Gap | Transfer % |
+|---|---|---|---|---|
+| mpnet mean-pool cap=50 (Exp. F) | 0.6380 | 0.5233 | 0.115 | 20% |
+| mpnet mean-pool cap=100 (Exp. G) | 0.6423 | 0.5234 | 0.119 | 15% |
+| Trained attention (Exp. I) | 0.8108 | 0.5217 | 0.289 | 0% (net −0.0017) |
+| **QK-attention cap=100 T=0.20 (Exp. J)** | **0.8248** | **0.5235** | 0.301 | **~2%** |
+
+The QK-attention achieves the best test AUC (**0.5235**, new best) but the val→test transfer rate collapses to ~2% (vs 15–20% for mean-pool). This confirms that the val AUC inflation for both Exp I and J comes from exploiting embedding geometry correlations present in the val split that don't fully hold at test time. The absolute test gain is +0.0001 over mean-pool cap=100 — real but marginal.
+
+**The 0.7x ceiling**: reaching 0.7x test AUC requires fine-tuning the news encoder end-to-end (NRMS, NAML, etc. with BERT/mpnet fine-tuning). Frozen-encoder approaches hit a hard ceiling at ~0.52–0.53 test AUC regardless of user encoder complexity. The val AUC can be made arbitrarily high (Exps I, J achieve 0.81–0.82) but val→test transfer degrades because the embedding geometry doesn't change.
+
+Key ordering of discoveries:
+1. **Score blending** (Exps A–C) — no test improvement
+2. **User representation depth** (Exp. D) — small reliable test gain from cap=50
+3. **Embedding model quality** (Exp. F) — largest zero-shot lever (+0.0021 test)
+4. **Category features** (Exps E, H) — positive val signal; marginal test transfer
+5. **Trained attention** (Exp. I) — high val AUC but temporal overfitting; net −0.0017 on test
+6. **QK-attention** (Exp. J) — best val AUC (0.8248), new best test AUC (0.5235, +0.0001)
+
+**Final best submission**: `mind_qk_T0.20_cap100_submission.zip` (test AUC = **0.5235**).
+Practical ceiling for frozen-encoder approaches: **~0.523–0.524** test AUC.

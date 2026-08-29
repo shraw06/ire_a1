@@ -94,3 +94,13 @@ Each entry should follow this template:
 - **Output Summary:** Created `src/evaluation/candidate_pool_sizes.py` verifying candidate pools were smaller than K=100. Updated `compare_retrievers.py` to calculate and plot highly discriminative `recall@5` and `recall@10` metrics. Modified `run_eval.py` to properly pass embeddings to BM25 evaluation for valid ILD metrics and fixed the degenerate slice CI logic so that slices <1% or >99% return `"insufficient_n"`, while specifically protecting the `"all"` baseline from being incorrectly flagged. Appended Section 13 to `design.md` detailing why absolute ILD magnitudes aren't comparable across different embedding spaces.
 - **Disposition:** Accepted with edits
 - **Edits Made:** Required a follow-up prompt to fix a bug where the `"all"` slice was being flagged as degenerate because it represented 1.0 (100%) of the population, leading to its CIs being incorrectly skipped. Also explicitly instructed to report `recall@5` alongside `recall@10` due to EB-NeRD's extremely small median candidate pool.
+
+---
+
+### 2026-08-29 20:50 - Scaling MIND Recommendation Pipelines & QK-Attention
+
+- **Tool / Model:** Gemini 3.1 Pro (High)
+- **Prompt / Task:** Maximize MIND recommendation performance by transitioning from zero-shot embedding retrieval to a supervised attention-based ranking model. Validate model performance, generate full-test-set submissions, and then pivot to candidate-conditioned query-key (QK) attention to bypass temporal overfitting. Finalize the technical design note.
+- **Output Summary:** Created high-performance supervised trainer (`train_attention_fast.py`) using pre-extracted memory-mapped numpy arrays to eliminate CPU bottlenecks. Identified temporal overfitting in the trained attention head (val AUC 0.8108, but test AUC 0.5217). Transitioned to a zero-parameter QK-attention approach (`tune_query_key_attention.py`, `generate_qk_submission.py`) which achieved the best test AUC of 0.5235. Updated `design.md` with final leaderboard results, ceiling analysis, and temporal overfitting diagnosis.
+- **Disposition:** Accepted as-is
+- **Edits Made:** No edits made.
