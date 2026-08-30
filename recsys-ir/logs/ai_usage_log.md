@@ -2,20 +2,6 @@
 
 This is a **living document**.
 
-## Log Format
-
-Each entry should follow this template:
-
-```
-### YYYY-MM-DD HH:MM - [Brief title]
-
-- **Tool / Model:** (e.g. Gemini 2.5 Pro, GitHub Copilot, ChatGPT-4o, …)
-- **Prompt / Task:** (what you asked or what was auto-suggested)
-- **Output Summary:** (what the tool produced)
-- **Disposition:** Accepted as-is / Accepted with edits / Rejected
-- **Edits Made:** (if accepted with edits, describe what you changed and why)
-```
-
 ---
 
 ### 2026-08-13 15:23 - Repository scaffold generation
@@ -97,6 +83,13 @@ Each entry should follow this template:
 
 ---
 
+### Optimizing the code to adjust for large dataset and submission requirements
+- **Tool / Model:** ChatGPT, Claude Sonnet
+- **Chat link:** 
+https://chatgpt.com/share/6a945343-bb74-83ee-aaa5-ed206f252eda
+https://claude.ai/share/2ec0b000-f0b8-49ab-a073-7780700cc376
+
+
 ### 2026-08-29 20:50 - Scaling MIND Recommendation Pipelines & QK-Attention
 
 - **Tool / Model:** Gemini 3.1 Pro (High)
@@ -104,3 +97,7 @@ Each entry should follow this template:
 - **Output Summary:** Created high-performance supervised trainer (`train_attention_fast.py`) using pre-extracted memory-mapped numpy arrays to eliminate CPU bottlenecks. Identified temporal overfitting in the trained attention head (val AUC 0.8108, but test AUC 0.5217). Transitioned to a zero-parameter QK-attention approach (`tune_query_key_attention.py`, `generate_qk_submission.py`) which achieved the best test AUC of 0.5235. Updated `design.md` with final leaderboard results, ceiling analysis, and temporal overfitting diagnosis.
 - **Disposition:** Accepted as-is
 - **Edits Made:** No edits made.
+
+---
+
+Spec MDs of some chats are saved inside the same current directory (/logs).
